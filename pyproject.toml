@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "reanime-mpv"
-version = "1.3.0"
-description = "Stream anime from reanime.to in mpv, English dubs included - interactive picker, zero dependencies."
+name = "toranime-mpv"
+version = "2.2.0"
+description = "Stream anime in mpv through TorBox, English dubs included - interactive picker, zero dependencies."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -20,14 +20,14 @@ classifiers = [
 dependencies = []  # stdlib only, by design
 
 [project.urls]
-Homepage = "https://github.com/vashhdev/reanime"
-Issues = "https://github.com/vashhdev/reanime/issues"
+Homepage = "https://github.com/throwin5s/toranime"
+Issues = "https://github.com/throwin5s/toranime/issues"
 
 [project.scripts]
-reanime = "reanime:main"
+toranime = "toranime:main"
 
 [tool.setuptools]
-py-modules = ["reanime"]
+py-modules = ["toranime"]
 
 [tool.ruff]
 target-version = "py38"

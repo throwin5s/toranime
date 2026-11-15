@@ -3,6 +3,104 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.0] - 2026-11-15
+
+### Added
+
+- **Release preferences** in `~/.config/toranime/prefs.json`: `prefer_groups`,
+  `avoid_groups`, `min_height` and `max_size` (GB per release). A preferred group outranks
+  resolution, and the caps are penalties rather than filters, so a capped-out release is
+  still used when it is the only one TorBox has cached.
+- **The release menu** appears after an episode is chosen: one numbered line per release
+  group with its best release, cache state and size. Press a number to pick that group,
+  Enter keeps the automatic pick, and the choice is preferred for the rest of the run. It
+  needs a real terminal and at least two groups, so scripts are unaffected.
+- **`--pick`** is the full-list version: a fuzzy picker over the top 25 releases.
+- **Subtitle looks** in `~/.config/toranime/subs.json`, applied with `--style NAME` or a
+  `"subtitle_style"` line in `prefs.json`. A look sets any ASS style fields you want
+  (`font`, `size`, `bold`, `outline`, `shadow`, `margin_v`, colours), fonts in the config
+  folder's `fonts/` are passed to mpv, and playback without a style keeps each release's
+  own look.
+- **Looks are written into a copy of each episode's subtitle file** (when `ffmpeg` is on
+  PATH) instead of only overriding mpv's renderer, so a border, weight or size means the
+  same thing on every release. The copy lives in the cache folder; the original track is
+  untouched, and without ffmpeg toranime falls back to mpv's style overrides.
+- **Playback starts immediately**: the baked copy is cached per release (not per stream URL,
+  which carries a fresh token every run), so it is made once, and a copy that isn't ready
+  is baked in the background while the episode plays and attached when done. Before, every
+  launch waited for the whole subtitle extraction: 14s on a 1.35 GB release.
+- **Your look is always one key away**: the first look in `subs.json` is now baked and loaded
+  as an extra subtitle track on every episode, with the release's own subtitles still
+  selected. **S** in mpv flips between the two mid-episode. `--style NAME` starts on the
+  look, `--style native` leaves it out; `"subtitle_style"` in `prefs.json` picks which look.
+- **Dubs keep the signs and songs**: `--dub` turns the dialogue subtitles off, but picks a
+  signs/songs (or forced) track when the release has one, and leaves subtitles off when
+  it doesn't. A subtitle look is skipped on dubs, since there is nothing to restyle.
+- **Unlabelled signs tracks are found by measuring them**: when a dub's release has several
+  English subtitle tracks and no titles or forced flags saying which is which, the first
+  five minutes of each are sampled and the sparse one (a couple of cues a minute, on
+  screen under 15% of the time) is used as the signs track. The verdict is cached per
+  release, so the sampling cost is paid once; labelled releases are never sampled.
+- **The episode picker shows your AniList progress**: episodes up to the last one you watched
+  are ticked `✓` and dimmed, the next one is marked `▶` with no colour change, and the header says what
+  the marks mean. Progress is read once per show, nothing is added without a login, and the
+  picker still opens on the episode you left off.
+
+### Fixed
+
+- **AniList login** takes a token pasted with `Bearer `, quotes or a trailing newline,
+  retries in place instead of exiting, and says whether a paste looks like the short code
+  instead of the long token. Three failures print the path to write `anilist.json` by hand.
+
+## [2.1.0] - 2026-11-15
+
+The app is **toranime** now. Nothing about playback changed.
+
+### Changed
+
+- **`reanime` is `toranime`**: the command, the module (`toranime.py`), the package
+  (`toranime-mpv`), the installer env vars (`TORANIME_PKG`, `TORANIME_YES`) and the
+  per-user folders. `python toranime.py` replaces `python reanime.py` one for one.
+- **Existing installs keep their data.** When the `toranime` folder has no `torbox.key`,
+  `sources.json`, `history.json` or AniList token, the one under the old name is read
+  instead. Nothing is copied: history is read from the old folder and saved to the new
+  one on the next write, so that first save is the migration.
+- The mpv scripts and the IPC socket live under `toranime` now, so the mpv scripts are
+  rewritten once. The old copies in the cache folder are unused and safe to delete.
+
+## [2.0.0] - 2026-11-15
+
+reanime is no longer a reanime.to client. It streams through **TorBox**: metadata comes
+from a Stremio catalog addon, releases from a Stremio stream addon, and the file from
+your TorBox account. The picker, binge mode, resume, opening/ending skip and AniList
+tracking are unchanged.
+
+### Added
+
+- **TorBox playback.** Releases TorBox already have play at once; `--dub` picks a
+  dual-audio release by name. Nothing is torrented from your machine and nothing is
+  written to disk: mpv streams TorBox's CDN link. A season pack's file is chosen by
+  its season and episode number, so a multi-season batch gives the right episode.
+- **Stremio addons for discovery.** The defaults are Anime Kitsu (episodes) and
+  Torrentio (releases), both keyless. `~/.config/reanime/sources.json` points either at
+  anything else, AIOStreams included, without a code change.
+- **`kitsu:10740`** works as the show argument, replacing pasted reanime.to urls.
+- **Kitsu to AniList mapping** for tracking: resolved once per show and cached.
+
+### Changed
+
+- The TorBox API key is read from `~/.config/reanime/torbox.key` (`chmod 600`), and is
+  never part of the link mpv is given.
+- Watch history is keyed by the addon id (`kitsu:10740`) instead of a reanime slug; old
+  entries are ignored.
+- `--list` prints episode numbers and titles only: a torrent's language belongs to the
+  release, not to the episode.
+- No mpv means no playback, but `--list` still works without a player.
+
+### Removed
+
+- reanime.to, flixcloud, the SvelteKit page parser and the flix server lookup.
+
 ## [1.3.0] - 2026-11-08
 
 ### Added

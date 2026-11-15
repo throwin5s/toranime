@@ -1,15 +1,15 @@
 #!/bin/sh
-# reanime installer for macOS, Linux and Android (Termux):
-#   curl -fsSL https://raw.githubusercontent.com/vashhdev/reanime/main/install.sh | sh
-# installs uv (which fetches its own Python if you have none), then reanime, then mpv.
+# toranime installer for macOS, Linux and Android (Termux):
+#   curl -fsSL https://raw.githubusercontent.com/throwin5s/toranime/main/install.sh | sh
+# installs uv (which fetches its own Python if you have none), then toranime, then mpv.
 # re-run it any time to update.
 #
 # env overrides (used by CI):
-#   REANIME_PKG=<path, url or requirement>   install this instead of the latest main
-#   REANIME_YES=1                            install mpv without asking
+#   TORANIME_PKG=<path, url or requirement>   install this instead of the latest main
+#   TORANIME_YES=1                            install mpv without asking
 set -e
 
-PKG="${REANIME_PKG:-reanime-mpv @ https://github.com/vashhdev/reanime/archive/refs/heads/main.zip}"
+PKG="${TORANIME_PKG:-toranime-mpv @ https://github.com/throwin5s/toranime/archive/refs/heads/main.zip}"
 
 termux=""
 if [ -n "${TERMUX_VERSION:-}" ]; then termux=1; fi
@@ -27,14 +27,14 @@ else
     uv tool install --force --reinstall "$PKG"
 fi
 
-if [ -n "$REANIME_YES" ]; then
-    reanime --setup --yes
+if [ -n "$TORANIME_YES" ]; then
+    toranime --setup --yes
 elif ( : </dev/tty ) 2>/dev/null; then
     # piped from curl, this script is stdin; point the mpv install prompt at the terminal
-    reanime --setup </dev/tty
+    toranime --setup </dev/tty
 else
-    reanime --setup
+    toranime --setup
 fi
 
 echo
-echo "done. run: reanime   (open a new terminal first if the command is not found)"
+echo "done. run: toranime   (open a new terminal first if the command is not found)"

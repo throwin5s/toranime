@@ -20,3 +20,8 @@ env/
 .idea/
 .DS_Store
 Thumbs.db
+
+# dev-only artifacts: ruff's cache, screenshots and subtitle comparisons from testing
+.ruff_cache/
+mpv-shot*.jpg
+subtitle-test/
