@@ -1222,9 +1222,22 @@ def group_candidates(anime, ep, lang):
     return best, cached
 
 
+GROUP_MENU = 8        # numbered rows for release groups, before typing to narrow
+
+
+def group_label(group, s, cached):
+    """one line per release group: its best release's cache state, size and name."""
+    text = stream_text(s)
+    size = size_bytes(text)
+    state = "cached" if str(s.get("infoHash") or "").lower() in cached else "not cached"
+    return (f"[{group}] {state:<10} {human_size(size) if size else '?':>9}  {text[:54]}")
+
+
 def choose_group(anime, ep, lang):
     """after the episode is picked: one numbered line per release group, Enter for the
-    best cached one. the chosen group is preferred for the rest of the run."""
+    best cached one. the chosen group is preferred for the rest of the run. past
+    GROUP_MENU groups the numbered keys run out, so the groups become a picker you
+    narrow by typing instead."""
     if not interactive_ok():
         return
     try:
@@ -1233,16 +1246,15 @@ def choose_group(anime, ep, lang):
         return                      # the menu is a convenience: never block playback
     if len(groups) < 2:
         return
-    options = []
-    for group, s in groups[:8]:
-        text = stream_text(s)
-        size = size_bytes(text)
-        state = "cached" if str(s.get("infoHash") or "").lower() in cached else "not cached"
-        options.append((f"[{group}] {state:<10} {human_size(size) if size else '?':>9}  "
-                        f"{text[:54]}", group))
-    options.append((f"best cached (now [{groups[0][0]}]) - press Enter", None))
-    idx = menu_pick(options, len(options) - 1, f"\nreleases for {ep_label(ep)}:")
-    group = options[idx][1]
+    if len(groups) > GROUP_MENU:
+        chosen = fuzzy_pick(groups, lambda g: group_label(g[0], g[1], cached),
+                            f"\nreleases for {ep_label(ep)}:", noun="release groups")
+        group = chosen[0] if chosen else None
+    else:
+        options = [(group_label(g, s, cached), g) for g, s in groups]
+        options.append((f"best cached (now [{groups[0][0]}]) - press Enter", None))
+        group = options[menu_pick(options, len(options) - 1,
+                                  f"\nreleases for {ep_label(ep)}:")][1]
     if group:
         PICK["prefer_groups"] = [group]
         sys.stderr.write(f"preferring [{group}] for the rest of this run\n")

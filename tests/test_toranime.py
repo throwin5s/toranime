@@ -416,17 +416,51 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(toranime.PICK["prefer_groups"], ["Sokudo"])
         self.assertIn("preferring [Sokudo]", err.getvalue())
 
-    def test_release_menu_keeps_to_nine_lines_and_skips_a_single_group(self):
-        many = [{"title": f"[Group{i}] Show - 01 [1080p]", "infoHash": f"{i}" * 40}
+    def test_too_many_groups_become_a_picker_you_can_type_narrow(self):
+        # the numbered menu has nine lines, so past eight groups the rest had no key:
+        # switch to the live-filter picker, with every group still reachable
+        many = [{"title": f"[Group{i}] Show - 01 [1080p]", "infoHash": f"{i:x}" * 40}
                 for i in range(12)]
         seen = {}
+
+        def pick(items, label, header, noun="items", initial=0):
+            seen.update(noun=noun, items=list(items), labels=[label(it) for it in items])
+            return items[9]
+        toranime.PICK.clear()
+        self.addCleanup(toranime.PICK.clear)
         with mock.patch.object(toranime, "streams", lambda a, e: many), \
+                mock.patch.object(toranime, "torbox_cached", lambda hashes: set(hashes)), \
+                mock.patch.object(toranime, "interactive_ok", lambda: True), \
+                mock.patch.object(toranime, "fuzzy_pick", pick), \
+                mock.patch.object(toranime, "menu_pick") as menu, \
+                contextlib.redirect_stderr(io.StringIO()):
+            toranime.choose_group(ANIME, EPISODES[1], "sub")
+        menu.assert_not_called()
+        self.assertEqual(seen["noun"], "release groups")
+        self.assertEqual(len(seen["items"]), 12)                  # nothing dropped
+        self.assertIn(f"[{seen['items'][9][0]}] cached", seen["labels"][9])
+        self.assertEqual(toranime.PICK["prefer_groups"], [seen["items"][9][0]])
+        with mock.patch.object(toranime, "streams", lambda a, e: many), \
+                mock.patch.object(toranime, "torbox_cached", lambda hashes: set(hashes)), \
+                mock.patch.object(toranime, "interactive_ok", lambda: True), \
+                mock.patch.object(toranime, "fuzzy_pick", lambda *a, **kw: None), \
+                contextlib.redirect_stderr(io.StringIO()):
+            toranime.choose_group(ANIME, EPISODES[1], "sub")
+        self.assertEqual(toranime.PICK["prefer_groups"], [seen["items"][9][0]])   # Esc: kept
+
+    def test_a_short_release_list_stays_numbered_and_a_single_group_is_skipped(self):
+        eight = [{"title": f"[Group{i}] Show - 01 [1080p]", "infoHash": f"{i:x}" * 40}
+                 for i in range(8)]
+        seen = {}
+        with mock.patch.object(toranime, "streams", lambda a, e: eight), \
                 mock.patch.object(toranime, "torbox_cached", lambda hashes: set(hashes)), \
                 mock.patch.object(toranime, "interactive_ok", lambda: True), \
                 mock.patch.object(toranime, "menu_pick",
                                   lambda options, default, header: seen.update(
-                                      n=len(options), default=default) or default):
+                                      n=len(options), default=default) or default), \
+                mock.patch.object(toranime, "fuzzy_pick") as fuzzy:
             toranime.choose_group(ANIME, EPISODES[1], "sub")
+        fuzzy.assert_not_called()
         self.assertEqual(seen["n"], 9)                            # 8 groups + auto
         single = [{"title": "[Judas] Show - 01 [1080p]", "infoHash": "a" * 40}]
         with mock.patch.object(toranime, "streams", lambda a, e: single), \

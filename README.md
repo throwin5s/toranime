@@ -178,7 +178,7 @@ releases for ONE PIECE 1151:
 press number, or Enter for default:
 ```
 
-One line per group, showing that group's best release, whether TorBox has it cached, its size and the release name. Press a number to pick that group, or **Enter** to keep the automatic pick. Whatever you pick is preferred for the rest of the run, so a binge stays in the same encode. It only appears on a real terminal, needs at least two groups to choose from, and `--list`, `--print` and `--m3u` still work without it.
+One line per group, showing that group's best release, whether TorBox has it cached, its size and the release name. Press a number to pick that group, or **Enter** to keep the automatic pick. Past eight groups the numbered keys run out, so it turns into the same live-filter picker as the anime search — type part of a group name to narrow, `↑`/`↓` to move, Enter to pick, Esc to keep the automatic choice. Whatever you pick is preferred for the rest of the run, so a binge stays in the same encode. It only appears on a real terminal, needs at least two groups to choose from, and `--list`, `--print` and `--m3u` still work without it.
 
 For the full list instead of one line per group, add `--pick`: a fuzzy picker over the top 25 releases.
 
