@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.2] - 2026-11-16
+
+### Fixed
+
+- **Release groups past the eighth are reachable.** The numbered menu only has keys
+  `1`-`9`, so a ninth group could not be picked at all. With more than eight groups the
+  same list is now the live-filter picker the anime search uses: type part of a group
+  name to narrow, `↑`/`↓` to move, Enter to pick, Esc to keep the automatic choice. The
+  picked group is still preferred for the rest of the run.
+
 ## [2.2.1] - 2026-11-16
 
 ### Fixed
