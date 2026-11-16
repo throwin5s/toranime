@@ -31,7 +31,7 @@ Usage:
   python toranime.py --setup                            # find or install mpv, then exit
 
 Players:
-  desktop : mpv, installed on first run if missing (winget/scoop/choco, brew/port,
+  desktop : mpv, installed on first run if missing (scoop/choco/winget, brew/port,
             apt/dnf/pacman/zypper/apk/xbps/nix, flatpak as a last resort)
   android : under Termux, episodes open in the mpv-android app (is.xyz.mpv)
 
@@ -60,7 +60,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -2424,12 +2424,17 @@ MPV_ANDROID_HELP = ("install the mpv-android app (is.xyz.mpv) from Google Play o
 
 # os key -> [(package manager, [commands])]. every manager on PATH is offered in
 # order; if one fails the next is tried. ids are checked against each repo:
-# winget's "mpv.net" is a different player (mpvnet.exe), shinchiro.mpv is real mpv.
+# scoop's extras/mpv and chocolatey's mpvio unpack the Windows build shinchiro
+# publishes (the one mpv.io links to) with a pinned hash, so they come first. winget's
+# shinchiro.mpv is a repack of that build by an unrelated project (0GMou/mpv2winget) in
+# its own unsigned installer: it is the only one on a bare Windows, so it stays last.
+# "mpv.net" is a different player (mpvnet.exe), and chocolatey's "mpv" is deprecated
+# in favour of "mpvio".
 MPV_INSTALL = {
-    "nt": [("winget", [["winget", "install", "-e", "--id", "shinchiro.mpv",
-                        "--accept-source-agreements", "--accept-package-agreements"]]),
-           ("scoop", [["scoop", "bucket", "add", "extras"], ["scoop", "install", "extras/mpv"]]),
-           ("choco", [["choco", "install", "mpv", "-y"]])],
+    "nt": [("scoop", [["scoop", "bucket", "add", "extras"], ["scoop", "install", "extras/mpv"]]),
+           ("choco", [["choco", "install", "mpvio", "-y"]]),
+           ("winget", [["winget", "install", "-e", "--id", "shinchiro.mpv",
+                        "--accept-source-agreements", "--accept-package-agreements"]])],
     "darwin": [("brew", [["brew", "install", "mpv"]]),
                ("port", [["sudo", "port", "install", "mpv"]])],
     "linux": [("apt", [["sudo", "apt-get", "update"], ["sudo", "apt-get", "install", "-y", "mpv"]]),

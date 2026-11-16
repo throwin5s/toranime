@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.1] - 2026-11-16
+
+### Fixed
+
+- **Windows installs prefer a package with a verifiable chain to shinchiro's build.**
+  `--setup` now tries Scoop, then Chocolatey, then winget. Scoop's `extras/mpv` and
+  Chocolatey's `mpvio` unpack the Windows build shinchiro publishes (the one mpv.io
+  links to) with a pinned hash; the Chocolatey id also moves off the deprecated `mpv`
+  package. winget's `shinchiro.mpv` is a repack of that build by an unrelated project
+  (`0GMou/mpv2winget`) in its own unsigned installer, so it is now the last resort for
+  a bare Windows with no other package manager.
+
 ## [2.2.0] - 2026-11-15
 
 ### Added
