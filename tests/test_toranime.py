@@ -1536,6 +1536,26 @@ class SubPicker(unittest.TestCase):
             time.sleep(0.05)
         self.assertNotIn(ipc.get("sid"), list(tracks.values()) + ["no"])  # the copy, unasked
 
+    def test_real_mpv_s_wins_over_a_config_that_binds_it_to_a_screenshot(self):
+        # mpv's own S takes a screenshot, and a config's S wins over a plain script
+        # binding: the picker has to claim the key, or the subtitles never switch
+        conf = os.path.join(CACHE.name, "input.conf")
+        with open(conf, "w", encoding="utf-8") as fh:
+            fh.write("S screenshot\n")
+        copy = os.path.join(CACHE.name, "look.ass")
+        with open(copy, "w", encoding="utf-8") as fh:
+            fh.write("[Script Info]\nScriptType: v4.00+\n\n[Events]\n"
+                     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
+                     "Effect, Text\nDialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,look\n")
+        ipc = self.live(toranime.sub_picker(), f"--input-conf={conf}", f"--sub-file={copy}")
+        subs = [t for t in ipc.get("track-list") if t.get("type") == "sub"]
+        full = next(t["id"] for t in subs if t.get("title") == "Full Subtitles")
+        copy_id = next(t["id"] for t in subs if t.get("external"))
+        self.assertEqual(ipc.get("sid"), full)
+        ipc.command("keypress", "S")
+        time.sleep(0.4)
+        self.assertEqual(ipc.get("sid"), copy_id)          # switched, not screenshotted
+
     def test_real_mpv_dub_keeps_the_dialogue_subtitles_one_key_away(self):
         ipc = self.live(toranime.signs_picker())
         tracks = {t["title"]: t["id"] for t in ipc.get("track-list") if t.get("type") == "sub"}
@@ -1689,7 +1709,7 @@ class Styles(unittest.TestCase):
                         "the copy has to be found before the release's English track is picked")
 
     def test_s_flips_between_the_release_and_the_copy(self):
-        self.assertIn('mp.add_key_binding("S", "toranime-look"', toranime.SUB_PICKER)
+        self.assertIn('mp.add_forced_key_binding("S", "toranime-look"', toranime.SUB_PICKER)
         self.assertIn("subtitles: your look", toranime.SUB_PICKER)
         self.assertIn("subtitles: the release's own", toranime.SUB_PICKER)
 

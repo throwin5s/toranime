@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.3] - 2026-11-16
+
+### Fixed
+
+- **S switches subtitles even when something else owns the key.** mpv's own `S` takes a
+  screenshot, and an `S` in a config wins over a plain script binding, so the subtitles
+  never switched and a screenshot appeared instead. Both pickers now claim the key
+  outright (`add_forced_key_binding`), so S always flips the release's subtitles and your
+  restyled copy, over a dub too.
+
 ## [2.2.2] - 2026-11-16
 
 ### Fixed

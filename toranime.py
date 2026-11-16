@@ -60,7 +60,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.2"
+__version__ = "2.2.3"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -1373,7 +1373,9 @@ local function find_copy()
     return newest
 end
 
-mp.add_key_binding("S", "toranime-look", function()
+-- forced: mpv's own S is a screenshot (and a config can bind S too), which would
+-- otherwise win and leave the subtitles alone
+mp.add_forced_key_binding("S", "toranime-look", function()
     local copy = find_copy()
     if not copy then
         if not mp.get_opt("toranime-look") then
@@ -1458,8 +1460,9 @@ mp.add_hook("on_preloaded", 50, function()
     mp.set_property("file-local-options/sid", signs and tostring(signs.id) or "no")
 end)
 
--- S over a dub: the full English subtitles on, and back to the signs and songs after
-mp.add_key_binding("S", "toranime-look", function()
+-- S over a dub: the full English subtitles on, and back to the signs and songs after.
+-- forced, so mpv's screenshot binding (or a config's) cannot take the key
+mp.add_forced_key_binding("S", "toranime-look", function()
     if not full then
         mp.osd_message("toranime: no English dialogue subtitles in this file", 3)
         return
