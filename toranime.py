@@ -60,7 +60,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.4"
+__version__ = "2.2.5"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -200,6 +200,56 @@ def _byte(fd, wait=None):
     return _held.pop(0)
 
 
+def _sane_tty():
+    """
+    put the terminal back into plain line-input mode, so Enter ends a line again.
+    a terminal that mpv (or any raw-mode program) was killed in never sees Enter:
+    input() then just echoes ^M and waits forever.
+    """
+    if not termios:
+        return
+    try:
+        fd = sys.stdin.fileno()
+        mode = termios.tcgetattr(fd)
+    except (OSError, ValueError, AttributeError, termios.error):    # not a terminal
+        return
+    mode[0] |= termios.ICRNL | termios.IXON | termios.BRKINT   # CR from Enter reads as \n
+    mode[1] |= termios.OPOST
+    mode[3] |= termios.ICANON | termios.ECHO | termios.ISIG | termios.IEXTEN
+    mode[6][termios.VMIN] = 1
+    mode[6][termios.VTIME] = 0
+    try:
+        termios.tcsetattr(fd, termios.TCSADRAIN, mode)
+    except (OSError, ValueError, termios.error):
+        pass
+
+
+def ask(prompt):
+    """input() with the terminal put back into line mode first."""
+    _sane_tty()
+    return input(prompt)
+
+
+def _tty_state():
+    """the terminal modes to put back after mpv has had the terminal."""
+    if not termios:
+        return None
+    try:
+        fd = sys.stdin.fileno()
+        return fd, termios.tcgetattr(fd)
+    except (OSError, ValueError, AttributeError, termios.error):
+        return None
+
+
+def _tty_restore(state):
+    if state is None:
+        return
+    try:
+        termios.tcsetattr(state[0], termios.TCSADRAIN, state[1])
+    except (OSError, ValueError, termios.error):
+        pass
+
+
 def fuzzy_pick(items, label, header, noun="items", initial=0):
     """
     live-filter picker. type letters to narrow, up/down to move, Enter to select.
@@ -278,7 +328,7 @@ def menu_pick(options, default_idx, header):
         d = f" {DIM}(default){RST}" if i == default_idx else ""
         print(f"  {i + 1}. {lbl}{d}")
     if not interactive_ok():
-        raw = input(f"choice [{default_idx + 1}]: ").strip()
+        raw = ask(f"choice [{default_idx + 1}]: ").strip()
         return default_idx if not raw else max(0, min(int(raw) - 1, len(options) - 1))
     sys.stdout.write(f"{DIM}press number, or Enter for default: {RST}")
     sys.stdout.flush()
@@ -297,11 +347,11 @@ def menu_pick(options, default_idx, header):
 def _fallback_pick(items, label, header):
     """no-msvcrt fallback: type a substring, plain input()."""
     print(header)
-    q = input("filter (substring): ").strip().lower()
+    q = ask("filter (substring): ").strip().lower()
     hits = [it for it in items if q in visible(label(it)).lower()] or list(items)
     for i, it in enumerate(hits):
         print(f"  {i + 1}. {label(it)}")
-    raw = input("number: ").strip()
+    raw = ask("number: ").strip()
     return hits[int(raw) - 1] if raw else hits[0]
 
 
@@ -797,7 +847,7 @@ def find_anime(query, auto):
             return got
     while True:
         if not query:
-            query = input("search anime: ").strip()
+            query = ask("search anime: ").strip()
             if not query:
                 sys.exit("cancelled")
         results = search(query)
@@ -2229,6 +2279,7 @@ def play_session(cmd, anime, eps, idx, lang, start=0.0, stop=None):
     first = [f"--force-media-title={title}"] + ([f"--start={start:.1f}"] if start else [])
     if burned:
         first.append(f"--sub-file={burned}")      # the look is baked into this copy
+    tty_before = _tty_state()          # mpv drives the terminal itself: put it back after
     proc = subprocess.Popen([*argv, "--{", *first, url, "--}"])   # per-file options
 
     queue = [idx]                     # mpv playlist entry -> index into eps
@@ -2310,7 +2361,12 @@ def play_session(cmd, anime, eps, idx, lang, start=0.0, stop=None):
             proc.wait()
         except KeyboardInterrupt:
             proc.kill()
+            try:
+                proc.wait(timeout=5)   # reap it, so its own tty restore cannot land after ours
+            except (KeyboardInterrupt, subprocess.TimeoutExpired):
+                pass
             status = "quit"
+        _tty_restore(tty_before)       # a killed mpv never puts the terminal back
         if os.name != "nt" and os.path.exists(path):
             try:
                 os.remove(path)
@@ -2540,7 +2596,7 @@ def ensure_player(mpv, assume_yes=False):
         shown = " && ".join(" ".join(c) for c in steps)
         if assume_yes:
             sys.stderr.write(f"installing mpv via {mgr}: {shown}\n")
-        elif input(f"install mpv now via {mgr}?  ({shown}) [Y/n] ").strip().lower() in ("n", "no"):
+        elif ask(f"install mpv now via {mgr}?  ({shown}) [Y/n] ").strip().lower() in ("n", "no"):
             sys.exit("mpv required. aborting.")
         for c in steps:
             subprocess.run(c)           # judged by the result below, not exit codes:
@@ -2704,6 +2760,8 @@ def main():
     args = ap.parse_args()
 
     _enable_vt()
+    if interactive_ok():
+        _sane_tty()                    # a terminal a killed player left raw would eat Enter
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")   # titles in scripts a codepage can't show

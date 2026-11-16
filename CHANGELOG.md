@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.5] - 2026-11-16
+
+### Fixed
+
+- **Searching works in a terminal a killed player left behind.** mpv drives the
+  terminal itself, and when it is killed instead of quit it never puts it back: after
+  that, Enter stops ending a line, so `search anime:` just echoes `^M` and waits
+  forever. Playback now restores the terminal modes it started with, and every prompt
+  puts the terminal back into plain line mode before reading.
+
 ## [2.2.4] - 2026-11-16
 
 ### Fixed

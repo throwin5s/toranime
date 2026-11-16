@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -884,6 +885,38 @@ class Keys(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             picked = toranime.fuzzy_pick(["one", "two", "three"], str, "\npick:")
         self.assertEqual(picked, "two")
+
+
+@unittest.skipUnless(hasattr(os, "openpty") and toranime.termios, "needs a POSIX terminal")
+class SaneTerminal(unittest.TestCase):
+    """prompts still read a line when a killed player left the terminal in raw mode."""
+
+    def setUp(self):
+        self.master, self.slave = os.openpty()
+        self.addCleanup(os.close, self.master)
+        self.addCleanup(os.close, self.slave)
+        tty_in = io.TextIOWrapper(io.BufferedReader(io.FileIO(self.slave, "rb", closefd=False)),
+                                  encoding="utf-8")
+        for patch in (mock.patch.object(sys, "stdin", tty_in),
+                      mock.patch.object(sys, "stdout", io.StringIO())):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_enter_still_ends_the_line_after_a_raw_terminal_was_left_behind(self):
+        toranime.tty.setraw(self.slave)         # what a killed mpv leaves: no Enter
+        later = threading.Timer(0.2, os.write, (self.master, b"one piece\r"))
+        later.start()
+        self.addCleanup(later.cancel)
+        self.assertEqual(toranime.ask("search anime: "), "one piece")
+
+    def test_the_terminal_goes_back_to_line_mode(self):
+        termios = toranime.termios
+        state = toranime._tty_state()
+        toranime.tty.setraw(self.slave)         # no canonical mode, no echo, CR stays CR
+        toranime._tty_restore(state)
+        after = termios.tcgetattr(self.slave)
+        self.assertTrue(after[3] & (termios.ICANON | termios.ECHO | termios.ISIG))
+        self.assertTrue(after[0] & termios.ICRNL)
 
 
 # ------------------------------------------------------------------ playback
