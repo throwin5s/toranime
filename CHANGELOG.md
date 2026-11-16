@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.4] - 2026-11-16
+
+### Fixed
+
+- **The missing-key message shows a command your shell can run.** On Windows it now
+  gives the PowerShell `New-Item` / `Set-Content` pair instead of `mkdir -p` and
+  `chmod`, which a fresh Windows install does not have.
+
 ## [2.2.3] - 2026-11-16
 
 ### Fixed

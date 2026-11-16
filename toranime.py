@@ -60,7 +60,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.3"
+__version__ = "2.2.4"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -957,8 +957,11 @@ def torbox_token():
         token = ""
     if not token:
         new = os.path.join(config_dir(), "torbox.key")
-        sys.exit(f"no TorBox API key. create one at torbox.app > Settings > API, then save it:\n"
-                 f"  mkdir -p {config_dir()} && printf '%s' 'KEY' > {new} && chmod 600 {new}")
+        # the command for this shell: Windows has neither printf nor chmod
+        how = (f"  New-Item -ItemType Directory -Force '{config_dir()}' | Out-Null; "
+               f"Set-Content -NoNewline '{new}' 'KEY'" if os.name == "nt" else
+               f"  mkdir -p {config_dir()} && printf '%s' 'KEY' > {new} && chmod 600 {new}")
+        sys.exit(f"no TorBox API key. create one at torbox.app > Settings > API, then save it:\n{how}")
     return token
 
 

@@ -25,3 +25,6 @@ Thumbs.db
 .ruff_cache/
 mpv-shot*.jpg
 subtitle-test/
+
+# screenshots taken while testing (never part of the repo)
+vm-state*.jpg
