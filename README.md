@@ -93,12 +93,25 @@ also asks GitHub for the newest release and prints one line when there is one;
 
 ## Setup: your TorBox key
 
-toranime reads the key from `torbox.key` in its config folder (`~/.config/toranime` on macOS and Linux, `%APPDATA%\toranime` on Windows):
+Create one at torbox.app > Settings > API, then save it:
+
+```bash
+toranime --torbox
+```
+
+It asks for the key without echoing it, asks `GET /user/me` whether the key works, and only then writes it to `torbox.key` in its config folder (`~/.config/toranime` on macOS and Linux, `%APPDATA%\toranime` on Windows) with owner-only permissions. It prints the account and plan it found, never the key, and re-asks when TorBox rejects one. `toranime --torbox logout` removes it.
+
+For scripts, the file is still just a file:
 
 ```bash
 mkdir -p ~/.config/toranime && chmod 700 ~/.config/toranime
 printf '%s' 'YOUR_TORBOX_KEY' > ~/.config/toranime/torbox.key
 chmod 600 ~/.config/toranime/torbox.key
+```
+
+```powershell
+New-Item -ItemType Directory -Force "$env:APPDATA\toranime" | Out-Null
+Set-Content -NoNewline "$env:APPDATA\toranime\torbox.key" 'YOUR_TORBOX_KEY'
 ```
 
 The key is only ever sent to `api.torbox.app`. It is never printed, never logged, and never passed to mpv: the link mpv receives is TorBox's signed CDN url, not a redirect that carries the key. It is never written to your watch history either.
@@ -158,6 +171,7 @@ toranime "one piece" 1151 --dub --print    # print the stream url instead of pla
 | `--setup` | find or install mpv, then exit |
 | `-y`, `--yes` | install mpv without asking if it's missing (scripts, CI) |
 | `--anilist` | log in to AniList (`--anilist logout` to stop) |
+| `--torbox` | save your TorBox API key (`--torbox logout` to remove it) |
 | `--update` | update toranime to the newest version |
 | `--no-update-check` | don't ask GitHub for a newer release on startup |
 

@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.8] - 2026-11-17
+
+### Added
+
+- **`toranime --torbox` saves your TorBox API key for you.** It asks for the key without
+  echoing it, checks it with `GET /user/me` *before* writing anything, and stores it `0600`
+  in `torbox.key` — no `mkdir` + `printf` + `chmod` by hand. It prints the account and plan
+  it found, never the key, and re-asks up to three times when TorBox rejects a paste.
+  Enter on an existing key keeps it; three bad keys leave it untouched.
+  `toranime --torbox logout` removes it, including the copy the old `reanime` folder left.
+- The "no TorBox API key" error now points at `toranime --torbox`, with the by-hand file
+  instructions after it for scripts.
+
 ## [2.2.7] - 2026-11-16
 
 ### Changed

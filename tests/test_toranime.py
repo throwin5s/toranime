@@ -125,6 +125,12 @@ class FakeNet:
             status, body = self.torbox_error
             raise urllib.error.HTTPError(url, status, "refused", {},
                                          io.BytesIO(json.dumps(body).encode()))
+        if path.endswith("/user/me"):
+            if (headers or {}).get("Authorization") == "Bearer bad":
+                return json.dumps({"success": False, "error": "BAD_TOKEN",
+                                   "detail": "That key is invalid"})
+            return json.dumps({"success": True,
+                               "data": {"email": "viewer@example.com", "plan": 3}})
         if path.endswith("/torrents/checkcached"):
             hashes = [h for h in query.get("hash", "").split(",") if h]
             return json.dumps({"success": True, "data": [
@@ -1602,6 +1608,107 @@ class AniList(unittest.TestCase):
             self.assertIsNone(toranime.anilist_token())
         with mock.patch.object(toranime, "ANILIST_CLIENT", ""):
             self.assertIn("isn't set up", run_main("--anilist")[0])
+
+
+class TorboxKey(unittest.TestCase):
+    """--torbox checks the key with TorBox, then saves it; logout removes it."""
+
+    def setUp(self):
+        self.path = os.path.join(toranime.config_dir(), "torbox.key")
+        with open(self.path, "w", encoding="utf-8") as fh:
+            fh.write("test-token\n")
+
+    def tearDown(self):
+        for path in (self.path, os.path.join(os.path.dirname(toranime.config_dir()),
+                                            toranime.LEGACY, "torbox.key")):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(path)
+
+    def saved(self):
+        with open(self.path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_login_saves_the_key_torbox_confirmed(self):
+        with net() as fake, mock.patch("getpass.getpass", return_value="  new-key\n"):
+            code, out, _ = run_main("--torbox")
+        self.assertEqual(code, 0)
+        self.assertIn("logged in to TorBox as viewer@example.com (plan: standard)", out)
+        self.assertNotIn("new-key", out)              # the key itself is never printed
+        self.assertEqual(self.saved(), "new-key\n")
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+        self.assertEqual(toranime.saved_key(), "new-key")
+        self.assertTrue(any(url.endswith("/user/me") for url in fake.calls))
+
+    def test_a_bearer_prefix_or_quotes_are_stripped(self):
+        with net(), mock.patch("getpass.getpass", return_value='"Bearer  new-key"'):
+            code, out, _ = run_main("--torbox")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.saved(), "new-key\n")
+
+    def test_a_rejected_key_is_asked_again_and_says_why(self):
+        with net(), mock.patch("getpass.getpass", side_effect=["bad", "good-key"]):
+            code, out, _ = run_main("--torbox")
+        self.assertEqual(code, 0)
+        self.assertIn("TorBox rejected that key (That key is invalid)", out)
+        self.assertEqual(self.saved(), "good-key\n")
+
+    def test_three_rejections_leave_the_key_already_there_alone(self):
+        with net(), mock.patch("getpass.getpass", return_value="bad"):
+            code, out, _ = run_main("--torbox")
+        self.assertNotEqual(code, 0)
+        self.assertIn("not saved", str(code))
+        self.assertEqual(self.saved(), "test-token\n")     # untouched
+
+    def test_enter_keeps_the_key_already_saved(self):
+        with net(), mock.patch("getpass.getpass", return_value=""):
+            code, out, _ = run_main("--torbox")
+        self.assertEqual(code, 0)
+        self.assertIn("already logged in to TorBox as viewer@example.com", out)
+        self.assertIn("keeping the key already saved", out)
+        self.assertEqual(self.saved(), "test-token\n")
+
+    def test_logout_removes_it_here_and_from_the_old_folder(self):
+        legacy = os.path.join(os.path.dirname(toranime.config_dir()), toranime.LEGACY)
+        os.makedirs(legacy, exist_ok=True)
+        with open(os.path.join(legacy, "torbox.key"), "w", encoding="utf-8") as fh:
+            fh.write("old-key\n")
+        with net():
+            code, out, _ = run_main("--torbox", "logout")
+        self.assertEqual(code, 0)
+        self.assertIn("removed the TorBox key", out)
+        self.assertIn("torbox.app > Settings > API", out)
+        self.assertFalse(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(os.path.join(legacy, "torbox.key")))
+        with net():
+            code, out, _ = run_main("--torbox", "logout")
+        self.assertIn("no TorBox key saved", out)
+
+    def test_who_asks_torbox_with_the_key_it_was_given(self):
+        seen = {}
+
+        def fake(url, headers=None, data=None, timeout=None):
+            seen["url"], seen["auth"] = url, (headers or {}).get("Authorization")
+            return json.dumps({"success": True, "data": {"email": "a@b", "plan": 1}})
+
+        with mock.patch.object(toranime, "fetch", fake):
+            who = toranime.torbox_who("candidate")
+        self.assertTrue(seen["url"].endswith("/user/me"))
+        self.assertEqual(seen["auth"], "Bearer candidate")
+        self.assertEqual(who, {"email": "a@b", "plan": "essential"})
+
+        def refused_call(url, headers=None, data=None, timeout=None):
+            return json.dumps({"success": False, "error": "BAD_TOKEN", "detail": "nope"})
+
+        with mock.patch.object(toranime, "fetch", refused_call), \
+                self.assertRaises(toranime.TorboxError):
+            toranime.torbox_who("nope")
+
+    def test_a_missing_key_points_at_the_command(self):
+        os.remove(self.path)
+        with self.assertRaises(SystemExit) as stopped:
+            toranime.torbox_token()
+        self.assertIn("toranime --torbox", str(stopped.exception.code))
+        self.assertIn("chmod 600", str(stopped.exception.code))   # the by-hand way is still there
 
 
 # ------------------------------------------------------------------ player setup

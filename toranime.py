@@ -29,6 +29,7 @@ Usage:
   python toranime.py kitsu:10740 --list                 # print every episode then exit
   python toranime.py "one piece" 1151 --dub --print     # print the stream url, don't launch mpv
   python toranime.py --setup                            # find or install mpv, then exit
+  python toranime.py --torbox                           # save your TorBox API key, then exit
 
 Players:
   desktop : mpv, installed on first run if missing (Windows: the official release
@@ -63,7 +64,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.7"
+__version__ = "2.2.8"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -991,36 +992,48 @@ class TorboxError(RuntimeError):
         self.code = code
 
 
-def refused(code, detail):
-    """a TorboxError, with a pointer at the key file when the key is the problem."""
+def refused(code, detail, hint=True):
+    """a TorboxError, with a pointer at the key file when the key is the problem.
+    `hint` is off while a pasted key is being checked: it isn't in that file yet."""
     detail = detail or "TorBox request failed"
-    if "token" in detail.lower() or str(code or "").lower() in ("bad_token", "auth_error"):
+    if hint and ("token" in detail.lower() or str(code or "").lower() in ("bad_token", "auth_error")):
         detail += (f" (check the key in {os.path.join(config_dir(), 'torbox.key')}"
                    " — torbox.app > Settings > API)")
     return TorboxError(code, detail)
 
 
+def saved_key():
+    """the TorBox API key on disk, or "" when there is none."""
+    try:
+        with open(config_file("torbox.key"), encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def key_help():
+    """how to save the key by hand, in the command this shell has."""
+    new = os.path.join(config_dir(), "torbox.key")
+    # Windows has neither printf nor chmod
+    return (f"  New-Item -ItemType Directory -Force '{config_dir()}' | Out-Null; "
+            f"Set-Content -NoNewline '{new}' 'KEY'" if os.name == "nt" else
+            f"  mkdir -p {config_dir()} && printf '%s' 'KEY' > {new} && chmod 600 {new}")
+
+
 def torbox_token():
     """the API key from ~/.config/toranime/torbox.key (or the old name's folder)."""
-    path = config_file("torbox.key")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            token = fh.read().strip()
-    except OSError:
-        token = ""
+    token = saved_key()
     if not token:
-        new = os.path.join(config_dir(), "torbox.key")
-        # the command for this shell: Windows has neither printf nor chmod
-        how = (f"  New-Item -ItemType Directory -Force '{config_dir()}' | Out-Null; "
-               f"Set-Content -NoNewline '{new}' 'KEY'" if os.name == "nt" else
-               f"  mkdir -p {config_dir()} && printf '%s' 'KEY' > {new} && chmod 600 {new}")
-        sys.exit(f"no TorBox API key. create one at torbox.app > Settings > API, then save it:\n{how}")
+        sys.exit("no TorBox API key. create one at torbox.app > Settings > API, then save it "
+                 "with:\n  toranime --torbox\nor by hand:\n" + key_help())
     return token
 
 
-def torbox(path, query=None, body=None, raw=None, content_type=None, timeout=30):
-    """one TorBox API call -> its `data`. raises TorboxError when TorBox refuses."""
-    token = torbox_token()
+def torbox(path, query=None, body=None, raw=None, content_type=None, timeout=30, token=None):
+    """one TorBox API call -> its `data`. raises TorboxError when TorBox refuses.
+    `token` checks a key before it is saved; by default the saved one is used."""
+    saved = token is None
+    token = token or torbox_token()
     url = TORBOX_API + path + ("?" + urllib.parse.urlencode(query, doseq=True) if query else "")
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     data = raw
@@ -1036,10 +1049,107 @@ def torbox(path, query=None, body=None, raw=None, content_type=None, timeout=30)
             said = json.loads(e.read().decode("utf-8", "replace"))
         except (ValueError, OSError):
             said = {}
-        raise refused(said.get("error"), said.get("detail") or f"TorBox HTTP {e.code}") from None
+        raise refused(said.get("error"), said.get("detail") or f"TorBox HTTP {e.code}",
+                      hint=saved) from None
     if not reply.get("success", True):
-        raise refused(reply.get("error"), reply.get("detail"))
+        raise refused(reply.get("error"), reply.get("detail"), hint=saved)
     return reply.get("data")
+
+
+TORBOX_PLANS = {0: "free", 1: "essential", 2: "pro", 3: "standard"}
+
+
+def torbox_who(token):
+    """the account `token` belongs to -> {"email": ..., "plan": ...}. raises
+    TorboxError when TorBox refuses the key."""
+    data = torbox("/user/me", token=token, timeout=15) or {}
+    plan = data.get("plan")
+    try:
+        plan = TORBOX_PLANS.get(int(plan), "")
+    except (TypeError, ValueError):
+        plan = ""
+    return {"email": str(data.get("email") or ""), "plan": plan}
+
+
+def who_label(who):
+    """what a checked key shows: the account's email and plan, when TorBox said."""
+    email, plan = (who or {}).get("email", ""), (who or {}).get("plan", "")
+    if email and plan:
+        return f"{email} (plan: {plan})"
+    return email or "your account"
+
+
+def torbox_login():
+    """save the TorBox API key: paste it once, and it is checked before it is written."""
+    import getpass
+    existing = saved_key()
+    who = None
+    if existing:
+        try:
+            who = torbox_who(existing)
+            print(f"already logged in to TorBox as {who_label(who)}.")
+        except TorboxError:
+            print("the key saved now is no longer accepted by TorBox.")
+        except (OSError, ValueError) as e:
+            print(f"couldn't check the key saved now ({e}).")
+        print("paste a new key to replace it, or press Enter to keep what is there.")
+    key = ""
+    for _ in range(3):           # a cut-short paste should not mean starting over
+        try:
+            raw = getpass.getpass("TorBox API key (torbox.app > Settings > API): ")
+        except (EOFError, KeyboardInterrupt):
+            sys.exit("\nno key given: nothing changed")
+        if not raw.strip():
+            if existing:
+                print(f"keeping the key already saved ({who_label(who) if who else 'as it is'})")
+                return
+            sys.exit("no key given: nothing changed")
+        key = clean_token(raw)
+        if not key:
+            sys.exit("no key given: nothing changed")
+        try:
+            who = torbox_who(key)
+        except TorboxError as e:
+            print(f"TorBox rejected that key ({e}): copy the whole key from "
+                  "torbox.app > Settings > API and paste it again.")
+            key = ""
+            continue
+        except (OSError, ValueError) as e:
+            sys.exit(f"TorBox didn't answer: {e}\nnothing was saved")
+        break
+    if not key or not who:
+        sys.exit("not saved. you can also write the key yourself:\n" + key_help()
+                 if not existing else "not saved: the key already there is unchanged")
+    os.makedirs(config_dir(), exist_ok=True)
+    try:
+        os.chmod(config_dir(), 0o700)
+    except OSError:
+        pass                      # Windows has no such bits: %APPDATA% is already yours
+    path = os.path.join(config_dir(), "torbox.key")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(key + "\n")
+    try:
+        os.chmod(path, 0o600)     # a file made earlier by hand may be more open than that
+    except OSError:
+        pass
+    print(f"logged in to TorBox as {who_label(who)}. toranime can use it now")
+
+
+def torbox_logout():
+    """remove the TorBox API key, here and from the folder the old name left."""
+    removed = False
+    for path in (os.path.join(config_dir(), "torbox.key"),
+                 os.path.join(os.path.dirname(config_dir()), LEGACY, "torbox.key")):
+        try:
+            os.remove(path)
+            removed = True
+        except FileNotFoundError:
+            pass
+    if not removed:
+        print("no TorBox key saved")
+        return
+    print("removed the TorBox key. to revoke it as well: torbox.app > Settings > API")
 
 
 def multipart(fields):
@@ -2910,6 +3020,9 @@ def main():
     ap.add_argument("--anilist", nargs="?", const="login", choices=("login", "logout"),
                     help="log in to AniList, so episodes you finish update your progress "
                          "there (--anilist logout to stop)")
+    ap.add_argument("--torbox", nargs="?", const="login", choices=("login", "logout"),
+                    help="save your TorBox API key, checked with TorBox before it is saved "
+                         "(--torbox logout to remove it)")
     ap.add_argument("--setup", action="store_true",
                     help="find or install mpv and exit (the installers run this)")
     ap.add_argument("-y", "--yes", action="store_true",
@@ -2932,6 +3045,9 @@ def main():
 
     if args.anilist:
         (anilist_login if args.anilist == "login" else anilist_logout)()
+        return
+    if args.torbox:
+        (torbox_login if args.torbox == "login" else torbox_logout)()
         return
     if args.setup:
         cmd = ensure_player(args.mpv, args.yes)
