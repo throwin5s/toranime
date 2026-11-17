@@ -1805,6 +1805,24 @@ class SeaDex(unittest.TestCase):
         self.assertLess(toranime.stream_rank(mine, set(), None, sd),
                         toranime.stream_rank(other, {"c" * 40}, None, sd))
 
+    def test_resolve_asks_torbox_for_the_seadex_pick(self):
+        pick = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
+        better = {"infoHash": "c" * 40, "title": "[X] ONE PIECE 1151 [2160p]"}
+        seen = {}
+
+        def fake_resolve(stream, number, season=None, verbose=True):
+            seen["stream"] = stream
+            return "https://example.invalid/link", {}
+
+        with mock.patch.object(toranime, "streams", lambda a, e: [better, pick]), \
+                mock.patch.object(toranime, "torbox_cached", lambda hashes: {"c" * 40}), \
+                mock.patch.object(toranime, "seadex_for",
+                                  lambda a: {"best": {"a" * 40}, "alt": set()}), \
+                mock.patch.object(toranime, "resolve_torrent", fake_resolve), \
+                mock.patch.object(toranime, "prefs", lambda: {}):
+            toranime.resolve(ANIME, EPISODES[1], "sub")
+        self.assertEqual(seen["stream"]["infoHash"], "a" * 40)   # SeaDex over cached 4K
+
     def test_a_group_you_asked_for_still_wins(self):
         sd = {"best": {"a" * 40}, "alt": set()}
         mine = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [2160p]"}
