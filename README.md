@@ -7,7 +7,8 @@ Stream anime straight into [mpv](https://mpv.io) through [TorBox](https://torbox
 toranime is a client: it asks a Stremio addon what episodes exist, asks another which releases exist, and has TorBox hand mpv a link to the file. It hosts nothing, downloads nothing to disk, and never torrents from your machine.
 
 - **Zero dependencies** - pure Python standard library.
-- **TorBox does the streaming** - only releases TorBox has already cached are used, so playback starts at once.
+- **TorBox does the streaming** - releases TorBox has already cached start at once; anything else toranime waits for, with a progress line.
+- **SeaDex picks first** - the release [SeaDex](https://releases.moe) recommends for a show is marked `♥ seadex` in sakura pink and tried before anything else.
 - **Stremio addons for discovery** - Anime Kitsu for episodes, Torrentio for releases. Both work without a key. Point either at something else (AIOStreams included) in a config file.
 - **Interactive picker** - type to filter, `↑`/`↓` to move, `Enter` to select.
 - **Binge mode** - one mpv window keeps going: the next episode is added to the playlist while the current one plays, so it starts on its own (or press `Enter` in mpv to skip ahead). Volume and fullscreen stay put.
@@ -168,6 +169,7 @@ toranime "one piece" 1151 --dub --print    # print the stream url instead of pla
 | `--m3u [PATH]` | write an `.m3u` playlist instead. Links are signed and last a few hours |
 | `--mpv PATH` | path to the mpv binary (default: found automatically) |
 | `--no-skip` | play openings and endings instead of skipping them |
+| `--no-seadex` | don't use SeaDex's picks (keeps the old cached-first order) |
 | `--setup` | find or install mpv, then exit |
 | `-y`, `--yes` | install mpv without asking if it's missing (scripts, CI) |
 | `--anilist` | log in to AniList (`--anilist logout` to stop) |
@@ -175,9 +177,15 @@ toranime "one piece" 1151 --dub --print    # print the stream url instead of pla
 | `--update` | update toranime to the newest version |
 | `--no-update-check` | don't ask GitHub for a newer release on startup |
 
+## SeaDex
+
+[SeaDex](https://releases.moe) is a community list of the best release of each show. toranime asks it once per show per day, matches its picks to the releases your addon returns by info hash (the same torrent, not a lookalike), and puts them first: in the release menu and `--pick` they wear a pink `♥ seadex`. Alternatives SeaDex lists get a quiet `seadex alt` note and keep their normal place. Nothing about you is sent, and a show SeaDex doesn't list changes nothing.
+
+A SeaDex pick outranks a release TorBox already has cached, so the first play of an uncached pick waits while TorBox fetches it (the progress line, up to three minutes; it is cached from then on). `--no-seadex` turns the whole thing off and restores the old order. If releases.moe can't be reached, the old order is used silently.
+
 ## Your own release preferences
 
-By default toranime takes the best cached release it finds: 2160p over 1080p over 720p. To steer it towards the groups you trust, write `~/.config/toranime/prefs.json`:
+By default toranime takes SeaDex's pick when the show has one, and otherwise the best cached release it finds: 2160p over 1080p over 720p. To steer it towards the groups you trust, write `~/.config/toranime/prefs.json`:
 
 ```json
 {
@@ -190,7 +198,7 @@ By default toranime takes the best cached release it finds: 2160p over 1080p ove
 
 - `prefer_groups` wins over resolution, so a preferred group at 720p still beats someone else's 2160p. `avoid_groups` is the opposite. Names are matched against the first `[bracket]` of a release name, case-insensitively.
 - `min_height` (720, 1080, 2160) and `max_size` (GB per release) are penalties, not filters: a release you capped out is used only when it is the only one cached, so a preference never leaves you with nothing to play.
-- Cached still comes first: a preferred group TorBox has not cached cannot play instantly.
+- A preferred group also outranks SeaDex's pick, and cached otherwise still comes first: a preferred group TorBox has not cached may have to be fetched.
 
 ### Your own subtitle look
 

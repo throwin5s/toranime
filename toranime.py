@@ -64,7 +64,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.8"
+__version__ = "2.2.9"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -97,6 +97,15 @@ DUB_WORDS = ("dual audio", "dual-audio", "dualaudio", "multi audio", "multi-audi
 VIDEO_EXT = (".mkv", ".mp4", ".avi", ".m4v", ".ts", ".webm")
 TORBOX_WAIT = 180        # seconds to wait for TorBox to fetch an uncached release
 MAX_TRIES = 4            # releases to try before giving up on an episode
+# SeaDex: a community list of the best release of a show, at releases.moe. read through
+# its REST API (PocketBase), matched by info hash, and remembered for a day.
+SEADEX_API = "https://releases.moe/api/collections/entries/records"
+SEADEX_TTL = 24 * 3600   # a day: it changes when someone releases something better
+SEADEX_FIELDS = ("alID,trs,expand.trs.infoHash,expand.trs.isBest,expand.trs.releaseGroup,"
+                 "expand.trs.dualAudio,expand.trs.url,expand.trs.tags")
+SEADEX = {}              # anilist id -> {"best": hashes, "alt": hashes} for this run
+SEADEX_LOCK = threading.Lock()
+NO_SEADEX = False        # --no-seadex
 
 # ------------------------------------------------------------------ interactive
 # single-key input: msvcrt on Windows, termios/tty on POSIX.
@@ -116,9 +125,30 @@ RST = CSI + "0m"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
+PINK = CSI + "38;5;218m"    # sakura: SeaDex's picks wear this
+
+
 def visible(text):
     """text with terminal colours stripped: what gets searched and counted."""
     return ANSI_RE.sub("", text)
+
+
+def fit(text, width):
+    """clip to `width` visible characters: colour escapes survive, and the row stays one
+    screen line (the picker redraws by counting lines, so wrapping would break it)."""
+    if not ANSI_RE.search(text):
+        return text[:width]
+    out, shown, i = [], 0, 0
+    while i < len(text) and shown < width:
+        m = ANSI_RE.match(text, i)
+        if m:
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        out.append(text[i])
+        shown += 1
+        i += 1
+    return "".join(out) + RST
 
 
 def interactive_ok():
@@ -297,7 +327,7 @@ def fuzzy_pick(items, label, header, noun="items", initial=0):
         for i, it in enumerate(rows):
             real = start + i
             mark = HL + " > " if real == sel else "   "
-            out.append(f"{mark}{label(it)[:width]}{RST}{CSI}K")
+            out.append(f"{mark}{fit(label(it), width)}{RST}{CSI}K")
         if not view:
             out.append(f"{DIM}  (no match){RST}{CSI}K")
         out.append(f"{DIM}  {len(view)}/{len(items)} {noun}{RST}{CSI}K")
@@ -960,10 +990,10 @@ def size_bytes(text):
                                     "mb": 1024 ** 2, "mib": 1024 ** 2}[m.group(2).lower()])
 
 
-def stream_rank(stream, cached, want=None):
-    """a release's sort key: cached first (instant), then your prefs.json groups, then
-    resolution. min_height and max_size are penalties, not filters: a release you capped
-    out is still used when it is the only thing cached."""
+def stream_rank(stream, cached, want=None, seadex=None):
+    """a release's sort key: the groups you asked for first, then SeaDex's picks, then
+    cached (instant), then resolution. min_height and max_size are penalties, not filters:
+    a release you capped out is still used when nothing better exists."""
     want = want or {}
     text = stream_text(stream)
     low = text.lower()
@@ -975,9 +1005,11 @@ def stream_rank(stream, cached, want=None):
     floor, cap = want.get("min_height") or 0, want.get("max_size") or 0
     size = size_bytes(text)
     h = str(stream.get("infoHash") or "").lower()
+    picked = (seadex or {}).get("best") or ()
     tier = 0 if height >= 2160 else 1 if height >= 1080 else 2 if height >= 720 else 3
-    return (0 if h and h in cached else 1,
-            0 if group and group in prefer else 1,
+    return (0 if group and group in prefer else 1,
+            0 if h and h in picked else 1,
+            0 if h and h in cached else 1,
             1 if group and group in avoid else 0,
             1 if floor and height and height < floor else 0,
             1 if cap and size and size > cap * 1024 ** 3 else 0,
@@ -1351,7 +1383,8 @@ def resolve(anime, ep, lang, verbose=True):
     direct = [s for s in found if not s.get("infoHash") and s.get("url")]
     cached = torbox_cached([s["infoHash"] for s in torrents]) if torrents else set()
     want = prefs()
-    torrents.sort(key=lambda s: stream_rank(s, cached, want))
+    picked = seadex_for(anime)
+    torrents.sort(key=lambda s: stream_rank(s, cached, want, picked))
     season = ep.get("imdbSeason") or ep.get("season")
     errors = []
     for stream in torrents[:MAX_TRIES]:
@@ -1377,7 +1410,8 @@ def group_candidates(anime, ep, lang):
         return [], set()
     hashes = [s["infoHash"] for s in found if s.get("infoHash")]
     cached = torbox_cached(hashes) if hashes else set()
-    found.sort(key=lambda s: stream_rank(s, cached, prefs()))
+    picked = seadex_for(anime)
+    found.sort(key=lambda s: stream_rank(s, cached, prefs(), picked))
     best, seen = [], set()
     for s in found:
         group = (release_group(s) or "-").lower()
@@ -1391,12 +1425,16 @@ def group_candidates(anime, ep, lang):
 GROUP_MENU = 8        # numbered rows for release groups, before typing to narrow
 
 
-def group_label(group, s, cached):
+def group_label(group, s, cached, seadex=None):
     """one line per release group: its best release's cache state, size and name."""
     text = stream_text(s)
     size = size_bytes(text)
     state = "cached" if str(s.get("infoHash") or "").lower() in cached else "not cached"
-    return (f"[{group}] {state:<10} {human_size(size) if size else '?':>9}  {text[:54]}")
+    tag = seadex_tag(s, seadex)
+    tag = tag + " " if tag else ""
+    room = 54 - (10 if tag else 0)          # the pink tag must not push the row wider
+    return (f"[{group}] {state:<10} {human_size(size) if size else '?':>9}  "
+            f"{tag}{text[:max(12, room)]}")
 
 
 def choose_group(anime, ep, lang):
@@ -1412,13 +1450,14 @@ def choose_group(anime, ep, lang):
         return                      # the menu is a convenience: never block playback
     if len(groups) < 2:
         return
+    picked = seadex_for(anime)
     if len(groups) > GROUP_MENU:
-        chosen = fuzzy_pick(groups, lambda g: group_label(g[0], g[1], cached),
+        chosen = fuzzy_pick(groups, lambda g: group_label(g[0], g[1], cached, picked),
                             f"\nreleases for {ep_label(ep)}:", noun="release groups")
         group = chosen[0] if chosen else None
     else:
-        options = [(group_label(g, s, cached), g) for g, s in groups]
-        options.append((f"best cached (now [{groups[0][0]}]) - press Enter", None))
+        options = [(group_label(g, s, cached, picked), g) for g, s in groups]
+        options.append((f"top pick (now [{groups[0][0]}]) - press Enter", None))
         group = options[menu_pick(options, len(options) - 1,
                                   f"\nreleases for {ep_label(ep)}:")][1]
     if group:
@@ -1436,14 +1475,18 @@ def pick_release(anime, ep, lang):
         return
     hashes = [s["infoHash"] for s in found if s.get("infoHash")]
     cached = torbox_cached(hashes) if hashes else set()
-    found.sort(key=lambda s: stream_rank(s, cached, prefs()))
+    picked = seadex_for(anime)
+    found.sort(key=lambda s: stream_rank(s, cached, prefs(), picked))
 
     def label(s):
         text = stream_text(s)
         size = size_bytes(text)
         state = "cached" if str(s.get("infoHash") or "").lower() in cached else "not cached"
+        tag = seadex_tag(s, picked)
+        tag = tag + " " if tag else ""
+        room = 54 - (10 if tag else 0)
         return (f"{(release_group(s) or '-'):<14} {human_size(size) if size else '?':>9} "
-                f"{state:<10} {text[:54]}")
+                f"{state:<10} {tag}{text[:max(12, room)]}")
 
     chosen = fuzzy_pick(found[:25], label, f"\n{ep_label(ep)}: releases (best first):",
                         noun="releases")
@@ -2061,6 +2104,89 @@ def anilist_id_of(anime):
         pass
     anime["anilist_id"] = found
     return found
+
+
+# ------------------------------------------------------------------ seadex
+# releases.moe keeps one entry per show: which torrent is the best version of it, and
+# which are the alternatives. matching is by info hash, which is exactly what the stream
+# addon gives us, so a SeaDex pick is the same torrent, not a lookalike.
+
+def seadex_file():
+    return state_file("seadex.json")
+
+
+def seadex_sets(entry):
+    """one SeaDex entry's expanded torrents -> {"best": hashes, "alt": hashes}.
+    private-tracker entries carry no hash ("<redacted>"), so they cannot be matched."""
+    out = {"best": set(), "alt": set()}
+    for tr in ((entry or {}).get("expand") or {}).get("trs") or []:
+        if not isinstance(tr, dict):
+            continue
+        h = str(tr.get("infoHash") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", h):
+            continue
+        out["best" if tr.get("isBest") else "alt"].add(h)
+    return out
+
+
+def seadex_for(anime):
+    """SeaDex's picks for a show -> {"best": hashes, "alt": hashes}. empty when the show
+    has no entry, releases.moe is unreachable, or --no-seadex was given: the release order
+    is then simply what it always was. one request per show per day, kept in state_dir()."""
+    empty = {"best": set(), "alt": set()}
+    if NO_SEADEX:
+        return empty
+    media = anilist_id_of(anime)
+    if not media:
+        return empty
+    key = str(media)
+    if key in SEADEX:
+        return SEADEX[key]
+    path = seadex_file()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cached = json.load(fh)
+    except (OSError, ValueError):
+        cached = {}
+    cached = cached if isinstance(cached, dict) else {}
+    got = cached.get(key) if isinstance(cached.get(key), dict) else {}
+    if not got or time.time() - float(got.get("at") or 0) >= SEADEX_TTL:
+        query = {"filter": f"(alID={int(media)})", "expand": "trs", "perPage": "1",
+                 "fields": SEADEX_FIELDS}
+        with SEADEX_LOCK:                  # a binge asks from several threads at once
+            if key not in SEADEX:
+                try:
+                    data = fetch_json(SEADEX_API + "?" + urllib.parse.urlencode(query),
+                                      timeout=15)
+                    items = data.get("items") or []
+                    found = seadex_sets(items[0] if items else {})
+                    got = {"at": time.time(), "best": sorted(found["best"]),
+                           "alt": sorted(found["alt"])}
+                    cached[key] = got
+                    try:
+                        os.makedirs(state_dir(), exist_ok=True)
+                        with open(path, "w", encoding="utf-8") as fh:
+                            json.dump(cached, fh)
+                    except OSError:
+                        pass
+                except (OSError, ValueError, AttributeError, urllib.error.URLError):
+                    pass                   # no SeaDex today: nothing to mark, nothing breaks
+    out = {"best": {str(h).lower() for h in (got or {}).get("best") or ()},
+           "alt": {str(h).lower() for h in (got or {}).get("alt") or ()}}
+    SEADEX[key] = out
+    return out
+
+
+def seadex_tag(stream, seadex):
+    """`♥ seadex` in sakura pink for a SeaDex pick, a quiet note for an alternative."""
+    h = str(stream.get("infoHash") or "").lower()
+    if not h or not seadex:
+        return ""
+    if h in (seadex.get("best") or ()):
+        return f"{PINK}♥ seadex{RST}"
+    if h in (seadex.get("alt") or ()):
+        return f"{DIM}seadex alt{RST}"
+    return ""
 
 
 WATCHED = {}        # anime key -> episodes AniList has watched, for this run
@@ -3017,6 +3143,8 @@ def main():
     ap.add_argument("--no-skip", action="store_true",
                     help="don't skip openings and endings (skipped when the file marks "
                          "them as chapters)")
+    ap.add_argument("--no-seadex", action="store_true",
+                    help="don't ask releases.moe which release SeaDex recommends")
     ap.add_argument("--anilist", nargs="?", const="login", choices=("login", "logout"),
                     help="log in to AniList, so episodes you finish update your progress "
                          "there (--anilist logout to stop)")
@@ -3043,6 +3171,8 @@ def main():
         except AttributeError:
             pass
 
+    global NO_SEADEX
+    NO_SEADEX = bool(args.no_seadex)
     if args.anilist:
         (anilist_login if args.anilist == "login" else anilist_logout)()
         return

@@ -52,6 +52,20 @@ def setUpModule():
     with open(os.path.join(toranime.config_dir(), "torbox.key"), "w", encoding="utf-8") as fh:
         fh.write("test-token\n")
 
+    class NoSeaDex(dict):
+        """every show looks already answered, so no test calls releases.moe."""
+        EMPTY = {"best": set(), "alt": set()}
+
+        def __contains__(self, key):
+            return True
+
+        def __getitem__(self, key):
+            return self.EMPTY
+
+    patcher = mock.patch.object(toranime, "SEADEX", NoSeaDex())
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
 
 # ------------------------------------------------------------------ fixtures
 
@@ -411,7 +425,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(seen["default"], len(labels) - 1)        # Enter = the automatic pick
         self.assertIn("[Judas] cached", labels[0])
         self.assertIn("1080p", labels[0])                        # the group's best release
-        self.assertTrue(labels[-1].startswith("best cached"))
+        self.assertTrue(labels[-1].startswith("top pick"))
         self.assertNotIn("prefer_groups", toranime.PICK)          # Enter changed nothing
 
     def test_release_menu_choice_becomes_the_preferred_group(self):
@@ -1712,6 +1726,134 @@ class TorboxKey(unittest.TestCase):
         self.assertIn("toranime --torbox", said)
         # the by-hand way is still there, in the shell this platform has
         self.assertIn("Set-Content" if os.name == "nt" else "chmod 600", said)
+
+
+SEADEX_ENTRY = {"items": [{"alID": 21, "expand": {"trs": [
+    {"infoHash": "a" * 40, "isBest": True, "releaseGroup": "A&C"},
+    {"infoHash": "b" * 40, "isBest": False, "releaseGroup": "F-R"},
+    {"infoHash": "<redacted>", "isBest": True, "releaseGroup": "-ZR-"},     # private tracker
+]}}]}
+
+
+class SeaDex(unittest.TestCase):
+    """SeaDex's picks are matched by info hash, put first, and marked in sakura pink."""
+
+    def setUp(self):
+        for patcher in (mock.patch.object(toranime, "SEADEX", {}),
+                        mock.patch.object(toranime, "NO_SEADEX", False),
+                        mock.patch.object(toranime, "SEADEX_TTL", 24 * 3600)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(toranime.seadex_file())
+
+    @staticmethod
+    def anime(anilist_id=21):
+        return {"kitsu_id": "10740", "anilist_id": anilist_id}
+
+    def age(self, seconds):
+        """pretend the on-disk copy is `seconds` old."""
+        with open(toranime.seadex_file(), encoding="utf-8") as fh:
+            data = json.load(fh)
+        for entry in data.values():
+            entry["at"] = time.time() - seconds
+        with open(toranime.seadex_file(), "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+
+    def test_picks_are_split_and_private_hashes_are_skipped(self):
+        with mock.patch.object(toranime, "fetch_json", return_value=SEADEX_ENTRY) as asked:
+            got = toranime.seadex_for(self.anime())
+        self.assertEqual(got["best"], {"a" * 40})
+        self.assertEqual(got["alt"], {"b" * 40})
+        url = asked.call_args[0][0]
+        self.assertTrue(url.startswith(toranime.SEADEX_API))
+        self.assertIn("expand=trs", url)
+        self.assertIn("21", url)
+
+    def test_a_show_without_an_entry_is_simply_unmarked(self):
+        with mock.patch.object(toranime, "fetch_json", return_value={"items": []}):
+            self.assertEqual(toranime.seadex_for(self.anime()), {"best": set(), "alt": set()})
+
+    def test_no_anilist_id_means_no_request(self):
+        with mock.patch.object(toranime, "fetch_json", side_effect=AssertionError("asked")):
+            self.assertEqual(toranime.seadex_for({}), {"best": set(), "alt": set()})
+
+    def test_one_request_a_day_then_the_disk_copy_is_used(self):
+        with mock.patch.object(toranime, "fetch_json", return_value=SEADEX_ENTRY) as asked:
+            toranime.seadex_for(self.anime())
+            toranime.SEADEX.clear()                 # a second run: only the disk copy
+            toranime.seadex_for(self.anime())
+        self.assertEqual(asked.call_count, 1)
+        self.age(2 * 24 * 3600)                     # two days later it is asked again
+        toranime.SEADEX.clear()
+        with mock.patch.object(toranime, "fetch_json", return_value=SEADEX_ENTRY) as again:
+            toranime.seadex_for(self.anime())
+        self.assertEqual(again.call_count, 1)
+
+    def test_a_failed_refresh_keeps_what_was_there(self):
+        with mock.patch.object(toranime, "fetch_json", return_value=SEADEX_ENTRY):
+            toranime.seadex_for(self.anime())
+        self.age(2 * 24 * 3600)
+        toranime.SEADEX.clear()
+        with mock.patch.object(toranime, "fetch_json", side_effect=OSError("down")):
+            self.assertEqual(toranime.seadex_for(self.anime())["best"], {"a" * 40})
+
+    def test_a_seadex_pick_beats_even_a_cached_4k_release(self):
+        sd = {"best": {"a" * 40}, "alt": set()}
+        mine = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
+        other = {"infoHash": "c" * 40, "title": "[X] ONE PIECE 1151 [2160p]"}
+        self.assertLess(toranime.stream_rank(mine, set(), None, sd),
+                        toranime.stream_rank(other, {"c" * 40}, None, sd))
+
+    def test_a_group_you_asked_for_still_wins(self):
+        sd = {"best": {"a" * 40}, "alt": set()}
+        mine = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [2160p]"}
+        other = {"infoHash": "c" * 40, "title": "[X] ONE PIECE 1151 [720p]"}
+        want = {"prefer_groups": ["X"]}
+        self.assertLess(toranime.stream_rank(other, set(), want, sd),
+                        toranime.stream_rank(mine, set(), want, sd))
+
+    def test_an_alternative_is_not_moved_up(self):
+        sd = {"best": set(), "alt": {"b" * 40}}
+        alt = {"infoHash": "b" * 40, "title": "[F-R] ONE PIECE 1151 [1080p]"}
+        other = {"infoHash": "d" * 40, "title": "[S] ONE PIECE 1151 [1080p]"}
+        self.assertEqual(toranime.stream_rank(alt, set(), None, sd),
+                         toranime.stream_rank(other, set(), None, sd))
+
+    def test_the_tag_is_pink_for_a_pick_and_quiet_for_an_alternative(self):
+        sd = {"best": {"a" * 40}, "alt": {"b" * 40}}
+        self.assertEqual(toranime.seadex_tag({"infoHash": "a" * 40}, sd),
+                         f"{toranime.PINK}♥ seadex{toranime.RST}")
+        self.assertIn("38;5;218", toranime.PINK)            # sakura, not generic magenta
+        self.assertIn("seadex alt", toranime.seadex_tag({"infoHash": "b" * 40}, sd))
+        self.assertEqual(toranime.seadex_tag({"infoHash": "c" * 40}, sd), "")
+        self.assertEqual(toranime.seadex_tag({"infoHash": "c" * 40}, {}), "")
+
+    def test_the_group_line_shows_the_tag_without_growing(self):
+        s = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p] - 1.31 GB"}
+        picked = toranime.group_label("A&C", s, {"a" * 40}, {"best": {"a" * 40}, "alt": set()})
+        plain = toranime.group_label("A&C", s, {"a" * 40}, None)
+        self.assertIn("♥ seadex", picked)
+        self.assertLessEqual(len(toranime.visible(picked)), len(toranime.visible(plain)) + 9)
+
+    def test_fit_clips_visible_text_but_keeps_the_colour(self):
+        text = toranime.PINK + "♥ seadex" + toranime.RST + " " + "x" * 40
+        out = toranime.fit(text, 10)
+        self.assertLessEqual(len(toranime.visible(out)), 10)
+        self.assertTrue(out.endswith(toranime.RST))
+        self.assertIn("38;5;218", out)
+        self.assertEqual(toranime.fit("plain text", 5), "plain")
+
+    def test_no_seadex_asks_nothing(self):
+        with mock.patch.object(toranime, "NO_SEADEX", True), \
+                mock.patch.object(toranime, "fetch_json", side_effect=AssertionError("asked")):
+            self.assertEqual(toranime.seadex_for(self.anime()), {"best": set(), "alt": set()})
+
+    def test_the_flag_reaches_the_global(self):
+        with mock.patch.object(toranime, "ensure_player", return_value=["mpv"]), \
+                mock.patch.object(toranime, "find_anime", side_effect=SystemExit(0)):
+            run_main("--no-seadex", "one piece")
+        self.assertTrue(toranime.NO_SEADEX)
 
 
 # ------------------------------------------------------------------ player setup

@@ -3,6 +3,28 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.9] - 2026-11-17
+
+### Added
+
+- **SeaDex's picks come first, in sakura pink.** toranime asks
+  [releases.moe](https://releases.moe) which release of the show is the best one, matches
+  it to the releases your addon returned by info hash, and puts it at the top — in the
+  release menu and `--pick` it wears `♥ seadex` in light pink. SeaDex's alternatives get a
+  quiet `seadex alt` note and keep their normal place.
+- The lookup is one request per show per day, cached in the app's state folder; a show
+  SeaDex doesn't list, a network failure or `--no-seadex` leaves the old order untouched.
+
+### Changed
+
+- **A SeaDex pick outranks a cached release.** That is the point of a curated list, but it
+  means the first play of a pick TorBox hasn't cached waits while TorBox fetches it (up to
+  180 s, with the progress line); after that it is cached and starts at once. A group you
+  listed in `prefs.json` still outranks SeaDex, and if a pick fails to fetch, the next
+  release is tried as before.
+- The release menu's default row now reads `top pick (now [group])` instead of claiming
+  the top release is cached.
+
 ## [2.2.8] - 2026-11-17
 
 ### Added
