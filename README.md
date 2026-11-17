@@ -51,6 +51,40 @@ SHA-256 GitHub publishes for that file and unpacks it into the app's cache folde
 there is no third-party installer and no admin prompt. Scoop and Chocolatey are the
 fallbacks if they are on PATH.
 
+### Installing mpv yourself (the most trusted route)
+
+`toranime --setup` already does this, and `toranime --setup --yes` does it without the
+question. To do it by hand — every step visible, nothing trusted but mpv's own
+repository — this is the whole thing, in PowerShell:
+
+```powershell
+# 1. what mpv publishes: the tag, the Windows asset for this machine, its SHA-256
+$rel   = Invoke-RestMethod 'https://api.github.com/repos/mpv-player/mpv/releases/latest'
+$asset = $rel.assets | Where-Object { $_.name -like 'mpv-v*-x86_64-w64-mingw32-full.zip' }
+#         (use 'mpv-v*-aarch64-w64-mingw32-full.zip' on Windows on ARM)
+$zip   = Join-Path $env:TEMP $asset.name
+
+# 2. download it from mpv's own release page
+Invoke-WebRequest $asset.browser_download_url -OutFile $zip
+
+# 3. check the hash GitHub publishes for that asset before you unpack anything
+$hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+if ($hash -ne $asset.digest.Replace('sha256:', '')) { throw "SHA-256 mismatch: delete $zip" }
+
+# 4. unpack it where toranime looks, then check it runs
+$dest = Join-Path $env:LOCALAPPDATA ("toranime\mpv\" + ($rel.tag_name -replace '^v', ''))
+Expand-Archive $zip $dest -Force
+& (Join-Path $dest 'mpv.exe') --version
+
+# 5. toranime finds that copy by itself
+toranime --setup
+```
+
+Prefer another folder? Unpack anywhere and say `toranime --mpv "C:\path\to\mpv.exe"`.
+For extra assurance, every mpv asset also ships a detached signature
+(`$asset.name + '.asc'`): `gpg --verify` it if you have GnuPG installed. macOS and Linux
+users get the same thing from `brew install mpv` / their package manager.
+
 ## Updates
 
 `toranime --update` reinstalls the newest version. The first interactive run of each day
