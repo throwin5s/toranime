@@ -1635,7 +1635,8 @@ class TorboxKey(unittest.TestCase):
         self.assertIn("logged in to TorBox as viewer@example.com (plan: standard)", out)
         self.assertNotIn("new-key", out)              # the key itself is never printed
         self.assertEqual(self.saved(), "new-key\n")
-        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+        if os.name != "nt":        # Windows has no such bits: %APPDATA% is already per-user
+            self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
         self.assertEqual(toranime.saved_key(), "new-key")
         self.assertTrue(any(url.endswith("/user/me") for url in fake.calls))
 
@@ -1707,8 +1708,10 @@ class TorboxKey(unittest.TestCase):
         os.remove(self.path)
         with self.assertRaises(SystemExit) as stopped:
             toranime.torbox_token()
-        self.assertIn("toranime --torbox", str(stopped.exception.code))
-        self.assertIn("chmod 600", str(stopped.exception.code))   # the by-hand way is still there
+        said = str(stopped.exception.code)
+        self.assertIn("toranime --torbox", said)
+        # the by-hand way is still there, in the shell this platform has
+        self.assertIn("Set-Content" if os.name == "nt" else "chmod 600", said)
 
 
 # ------------------------------------------------------------------ player setup
