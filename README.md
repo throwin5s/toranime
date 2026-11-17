@@ -20,7 +20,7 @@ toranime is a client: it asks a Stremio addon what episodes exist, asks another 
 ## What you need
 
 1. A **TorBox account** with an API key (torbox.app > Settings > API). Cached releases are a paid feature on TorBox's side.
-2. **mpv** - `toranime --setup` finds it, or offers to install it with your system's package manager.
+2. **mpv** - `toranime --setup` finds it, or offers to install it (on Windows from mpv's own verified release, otherwise with your system's package manager).
 3. **Python 3.8+** - or just use the installer, which brings its own.
 
 ## Install
