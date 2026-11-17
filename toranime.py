@@ -60,7 +60,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.5"
+__version__ = "2.2.6"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -2681,6 +2681,68 @@ def watch(cmd, anime, eps, idx, lang, start=0.0, stop=None):
         binge(cmd, anime, eps, idx, lang, start, stop)
 
 
+# the update check: one line, once a day, and silent when it can't find out
+RELEASES_API = "https://api.github.com/repos/throwin5s/toranime/releases/latest"
+UPDATE_EVERY = 24 * 3600        # seconds between automatic checks
+
+
+def as_version(text):
+    """'v2.2.6' -> (2, 2, 6). junk or missing -> (), which compares older than anything."""
+    return tuple(int(n) for n in re.findall(r"\d+", str(text or ""))[:3])
+
+
+def latest_release(timeout=2.5):
+    """the newest release number on GitHub, or None. never raises: an unreachable or
+    private repo is not worth interrupting playback for."""
+    try:
+        data = fetch_json(RELEASES_API, {"Accept": "application/vnd.github+json"},
+                          timeout=timeout)
+        return as_version(data.get("tag_name"))
+    except (OSError, ValueError, KeyError, AttributeError):
+        return None
+
+
+def update_state():
+    """what the last check found: {"checked": seconds, "latest": (2, 2, 6)}."""
+    try:
+        with open(os.path.join(cache_dir(), "update.json"), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def remember_check(latest, now=None):
+    """the answer, so the next runs don't ask again (best effort: no cache, no problem)."""
+    try:
+        os.makedirs(cache_dir(), exist_ok=True)
+        with open(os.path.join(cache_dir(), "update.json"), "w", encoding="utf-8") as fh:
+            json.dump({"checked": time.time() if now is None else now,
+                       "latest": ".".join(str(n) for n in latest)}, fh)
+    except OSError:
+        pass
+
+
+def update_notice(now=None):
+    """say so, once a day, when GitHub has a newer release. -> the line, or None."""
+    if os.environ.get("TORANIME_NO_UPDATE_CHECK"):
+        return None
+    now = time.time() if now is None else now
+    state = update_state()
+    checked = state.get("checked")
+    if isinstance(checked, (int, float)) and 0 <= now - checked < UPDATE_EVERY:
+        latest = as_version(state.get("latest"))       # answered earlier today
+    else:
+        latest = latest_release()
+        remember_check(latest or (), now)              # a failed check waits a day too
+    if latest and latest > as_version(__version__):
+        line = (f"toranime {'.'.join(str(n) for n in latest)} is available "
+                f"(you have {__version__}): run toranime --update")
+        sys.stderr.write(line + "\n")
+        return line
+    return None
+
+
 # what the one-line installers install, and how to run them again
 PACKAGE = "toranime-mpv @ https://github.com/throwin5s/toranime/archive/refs/heads/main.zip"
 INSTALLER = ("irm https://raw.githubusercontent.com/throwin5s/toranime/main/install.ps1 | iex"
@@ -2756,6 +2818,8 @@ def main():
                     help="install mpv without asking if it is missing (scripts, CI)")
     ap.add_argument("--update", action="store_true",
                     help="update toranime to the newest version and exit")
+    ap.add_argument("--no-update-check", action="store_true",
+                    help="don't ask GitHub for a newer release on startup")
     ap.add_argument("--version", action="version", version=f"toranime {__version__}")
     args = ap.parse_args()
 
@@ -2780,6 +2844,9 @@ def main():
         return
     # check the player before any searching, so a first run sets everything up front
     playing = not (args.list or args.print_only or args.m3u is not None)
+    if playing and interactive_ok() and not args.no_update_check:
+        update_notice()             # one line a day, before anything asks for input
+    # check the player before any searching, so a first run sets everything up front
     cmd = ensure_player(args.mpv, args.yes) if playing else None
     if cmd and not args.no_skip:
         cmd = [*cmd, *skip_args()]

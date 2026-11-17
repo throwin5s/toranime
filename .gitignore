@@ -28,3 +28,12 @@ subtitle-test/
 
 # screenshots taken while testing (never part of the repo)
 vm-state*.jpg
+
+# credentials and per-user config: they live in the config folder, never here
+*.key
+torbox.key
+anilist.json
+history.json
+subs.json
+prefs.json
+sources.json

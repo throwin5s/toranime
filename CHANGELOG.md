@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.6] - 2026-11-16
+
+### Added
+
+- **A newer release tells you, once a day.** The first interactive run of each day asks
+  GitHub for the newest release (2.5 s at most, and the answer is cached in the cache
+  folder) and prints one line when there is one: `toranime --update`.
+  `--no-update-check` or `TORANIME_NO_UPDATE_CHECK=1` turns it off; `--list`, `--print`
+  and `--m3u` never ask, and a failed check stays silent.
+
+### Changed
+
+- The repository is public again, so `toranime --update` and the one-line installers
+  work without a token.
+
 ## [2.2.5] - 2026-11-16
 
 ### Fixed

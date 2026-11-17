@@ -25,6 +25,9 @@ import urllib.error
 import urllib.parse
 from unittest import mock
 
+# the update check talks to GitHub: tests never do (UpdateCheck turns it back on)
+os.environ["TORANIME_NO_UPDATE_CHECK"] = "1"
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 import toranime  # noqa: E402
@@ -919,6 +922,94 @@ class SaneTerminal(unittest.TestCase):
         self.assertTrue(after[0] & termios.ICRNL)
 
 
+class UpdateCheck(unittest.TestCase):
+    """the daily "a newer release exists" line: cheap, quiet, and never in the way."""
+
+    def setUp(self):
+        self.cache = tempfile.TemporaryDirectory()
+        self.addCleanup(self.cache.cleanup)
+        for patch in (mock.patch.object(toranime, "cache_dir", return_value=self.cache.name),
+                      mock.patch.dict(os.environ, {"TORANIME_NO_UPDATE_CHECK": ""})):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def check(self, tag=None, now=None, asked=None):
+        """update_notice() with GitHub's answer replaced by `tag`."""
+        def fake(timeout=2.5):
+            if asked is not None:
+                asked.append(tag)
+            return toranime.as_version(tag) if tag else None
+        err = io.StringIO()
+        with mock.patch.object(toranime, "latest_release", side_effect=fake), \
+                contextlib.redirect_stderr(err):
+            line = toranime.update_notice(now=now)
+        return line, err.getvalue()
+
+    def test_a_newer_release_is_announced(self):
+        line, err = self.check("v9.9.9")
+        self.assertIn("toranime 9.9.9 is available", line)
+        self.assertIn("toranime --update", line)
+        self.assertIn(toranime.__version__, line)        # what you have
+        self.assertEqual(err.strip(), line)              # exactly one line, on stderr
+
+    def test_the_newest_version_is_silent(self):
+        self.assertEqual(self.check(f"v{toranime.__version__}"), (None, ""))
+
+    def test_github_is_asked_once_a_day(self):
+        asked = []
+        self.check("v9.9.9", now=1000, asked=asked)
+        self.check("v9.9.9", now=1000 + 3600, asked=asked)          # same day: cached answer
+        self.assertEqual(len(asked), 1)
+        self.check("v9.9.9", now=1000 + toranime.UPDATE_EVERY + 1, asked=asked)
+        self.assertEqual(len(asked), 2)                             # a day later: ask again
+
+    def test_a_failed_check_is_quiet_and_waits_a_day(self):
+        asked = []
+        self.assertEqual(self.check(None, now=1000, asked=asked), (None, ""))
+        self.assertEqual(self.check(None, now=2000, asked=asked), (None, ""))
+        self.assertEqual(len(asked), 1)                             # offline twice, asked once
+
+    def test_the_environment_switches_it_off(self):
+        with mock.patch.object(toranime, "latest_release") as latest, \
+                mock.patch.dict(os.environ, {"TORANIME_NO_UPDATE_CHECK": "1"}):
+            self.assertIsNone(toranime.update_notice())
+        latest.assert_not_called()
+
+    def test_a_tag_becomes_numbers(self):
+        for text, want in (("v2.2.6", (2, 2, 6)), ("2.3", (2, 3)), ("v2.2.6-rc1", (2, 2, 6)),
+                           ("", ()), (None, ()), ("newest", ())):
+            with self.subTest(text=text):
+                self.assertEqual(toranime.as_version(text), want)
+
+    def test_a_normal_run_checks_before_asking_anything(self):
+        with mock.patch.object(toranime, "interactive_ok", return_value=True), \
+                mock.patch.object(toranime, "ensure_player", return_value=["mpv"]), \
+                mock.patch.object(toranime, "continue_prompt", return_value=None), \
+                mock.patch.object(toranime, "find_anime", side_effect=SystemExit(0)), \
+                mock.patch.object(toranime, "update_notice") as notice:
+            run_main()
+        notice.assert_called_once()
+
+    def test_the_quiet_flags_never_ask(self):
+        for argv in (["--list"], ["--print"], ["--m3u"], ["--no-update-check"]):
+            with self.subTest(argv=argv), \
+                    mock.patch.object(toranime, "interactive_ok", return_value=True), \
+                    mock.patch.object(toranime, "ensure_player", return_value=["mpv"]), \
+                    mock.patch.object(toranime, "continue_prompt", return_value=None), \
+                    mock.patch.object(toranime, "find_anime", side_effect=SystemExit(0)), \
+                    mock.patch.object(toranime, "update_notice") as notice:
+                run_main(*argv)
+            notice.assert_not_called()
+
+    def test_a_non_interactive_run_never_asks(self):
+        with mock.patch.object(toranime, "ensure_player", return_value=["mpv"]), \
+                mock.patch.object(toranime, "continue_prompt", return_value=None), \
+                mock.patch.object(toranime, "find_anime", side_effect=SystemExit(0)), \
+                mock.patch.object(toranime, "update_notice") as notice:
+            run_main()
+        notice.assert_not_called()
+
+
 # ------------------------------------------------------------------ playback
 
 def fake_resolve(anime, ep, lang, verbose=True):
@@ -1378,11 +1469,11 @@ class AniList(unittest.TestCase):
                 mock.patch("webbrowser.open", lambda url: False), \
                 mock.patch.object(toranime, "anilist",
                                   side_effect=[toranime.AniListAuth("no"),
-                                               {"Viewer": {"name": "spencer"}}]), \
+                                               {"Viewer": {"name": "viewer"}}]), \
                 contextlib.redirect_stdout(print_out):
             toranime.anilist_login()
         self.assertIn("only 10 characters", print_out.getvalue())    # names the real problem
-        self.assertIn("logged in to AniList as spencer", print_out.getvalue())
+        self.assertIn("logged in to AniList as viewer", print_out.getvalue())
         self.assertEqual(toranime.anilist_token(), good)
 
     def test_login_gives_up_with_the_manual_path_after_three_tries(self):

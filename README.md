@@ -25,32 +25,31 @@ toranime is a client: it asks a Stremio addon what episodes exist, asks another 
 
 ## Install
 
-This repository is private, so install from a clone, or from the wheel attached to a
-[release](https://github.com/throwin5s/toranime/releases). [uv](https://docs.astral.sh/uv/)
-brings its own Python, so nothing else is needed.
+[uv](https://docs.astral.sh/uv/) brings its own Python, so nothing else is needed. The
+one-line installers do the whole job: uv, toranime, and `toranime --setup` for mpv.
 
 **Windows** (PowerShell):
 
 ```powershell
-git clone https://github.com/throwin5s/toranime.git
-cd toranime
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"   # skip if you have uv
-uv tool install .
-toranime --setup
+irm https://raw.githubusercontent.com/throwin5s/toranime/main/install.ps1 | iex
 ```
 
 **macOS / Linux / Steam Deck / Android (Termux)**:
 
 ```bash
-uv tool install .
-toranime --setup
+curl -fsSL https://raw.githubusercontent.com/throwin5s/toranime/main/install.sh | sh
 ```
 
-`toranime --setup` finds mpv or offers to install it. Without uv, install the release
-wheel (`uv tool install toranime_mpv-*.whl`), or with Python 3.8+ already there, download
-`toranime.py` and run `python toranime.py` — it works without installing. The one-line
-`install.ps1` / `install.sh` scripts still work from a clone with `TORANIME_PKG=<wheel>`, but
-their default download needs the repository to be public.
+From a clone, `uv tool install .` does the same. Without uv, install the wheel attached to
+a [release](https://github.com/throwin5s/toranime/releases)
+(`uv tool install toranime_mpv-*.whl`), or with Python 3.8+ already there, download
+`toranime.py` and run `python toranime.py` — it works without installing.
+
+## Updates
+
+`toranime --update` reinstalls the newest version. The first interactive run of each day
+also asks GitHub for the newest release and prints one line when there is one;
+`--no-update-check` (or `TORANIME_NO_UPDATE_CHECK=1`) turns that off.
 
 ## Setup: your TorBox key
 
@@ -120,6 +119,7 @@ toranime "one piece" 1151 --dub --print    # print the stream url instead of pla
 | `-y`, `--yes` | install mpv without asking if it's missing (scripts, CI) |
 | `--anilist` | log in to AniList (`--anilist logout` to stop) |
 | `--update` | update toranime to the newest version |
+| `--no-update-check` | don't ask GitHub for a newer release on startup |
 
 ## Your own release preferences
 
