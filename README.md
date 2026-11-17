@@ -45,6 +45,12 @@ a [release](https://github.com/throwin5s/toranime/releases)
 (`uv tool install toranime_mpv-*.whl`), or with Python 3.8+ already there, download
 `toranime.py` and run `python toranime.py` — it works without installing.
 
+On Windows, if mpv is missing, `toranime --setup` offers mpv's **own** build from
+[github.com/mpv-player/mpv](https://github.com/mpv-player/mpv/releases): it checks the
+SHA-256 GitHub publishes for that file and unpacks it into the app's cache folder, so
+there is no third-party installer and no admin prompt. Scoop and Chocolatey are the
+fallbacks if they are on PATH.
+
 ## Updates
 
 `toranime --update` reinstalls the newest version. The first interactive run of each day

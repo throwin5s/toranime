@@ -31,7 +31,8 @@ Usage:
   python toranime.py --setup                            # find or install mpv, then exit
 
 Players:
-  desktop : mpv, installed on first run if missing (scoop/choco/winget, brew/port,
+  desktop : mpv, installed on first run if missing (Windows: the official release
+            from github.com/mpv-player/mpv, then scoop/choco; brew/port;
             apt/dnf/pacman/zypper/apk/xbps/nix, flatpak as a last resort)
   android : under Termux, episodes open in the mpv-android app (is.xyz.mpv)
 
@@ -46,6 +47,7 @@ import glob
 import hashlib
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -58,9 +60,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.6"
+__version__ = "2.2.7"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -2497,18 +2500,16 @@ MPV_ANDROID_HELP = ("install the mpv-android app (is.xyz.mpv) from Google Play o
                     "https://github.com/mpv-android/mpv-android")
 
 # os key -> [(package manager, [commands])]. every manager on PATH is offered in
-# order; if one fails the next is tried. ids are checked against each repo:
-# scoop's extras/mpv and chocolatey's mpvio unpack the Windows build shinchiro
-# publishes (the one mpv.io links to) with a pinned hash, so they come first. winget's
-# shinchiro.mpv is a repack of that build by an unrelated project (0GMou/mpv2winget) in
-# its own unsigned installer: it is the only one on a bare Windows, so it stays last.
-# "mpv.net" is a different player (mpvnet.exe), and chocolatey's "mpv" is deprecated
-# in favour of "mpvio".
+# order; if one fails the next is tried. on Windows the official mpv release above is
+# tried before any of these, so a bare Windows needs no package manager at all. scoop's
+# extras/mpv installs that same zip with a pinned hash, and mpv.io lists chocolatey's
+# mpvio; both are fine. "mpv.net" is a different player (mpvnet.exe), and chocolatey's
+# "mpv" is deprecated in favour of "mpvio".
+# winget's shinchiro.mpv is deliberately absent: it is an unrelated project's repack of
+# mpv in its own unsigned installer, not mpv's release.
 MPV_INSTALL = {
     "nt": [("scoop", [["scoop", "bucket", "add", "extras"], ["scoop", "install", "extras/mpv"]]),
-           ("choco", [["choco", "install", "mpvio", "-y"]]),
-           ("winget", [["winget", "install", "-e", "--id", "shinchiro.mpv",
-                        "--accept-source-agreements", "--accept-package-agreements"]])],
+           ("choco", [["choco", "install", "mpvio", "-y"]])],
     "darwin": [("brew", [["brew", "install", "mpv"]]),
                ("port", [["sudo", "port", "install", "mpv"]])],
     "linux": [("apt", [["sudo", "apt-get", "update"], ["sudo", "apt-get", "install", "-y", "mpv"]]),
@@ -2525,7 +2526,7 @@ MPV_INSTALL = {
                            ["flatpak", "install", "--user", "-y", "flathub", "io.mpv.Mpv"]])],
 }
 # where those installs leave mpv. a fresh install is usually not on this process's
-# PATH yet (and winget's shinchiro.mpv never adds itself), so look here directly.
+# PATH yet (a scoop shim is, only in a new shell), so look here directly.
 MPV_DIRS = {
     "nt": [r"%ProgramFiles%\MPV Player", r"%ProgramFiles%\mpv", r"%LOCALAPPDATA%\Programs\mpv",
            r"%LOCALAPPDATA%\Microsoft\WinGet\Links", r"%USERPROFILE%\scoop\shims",
@@ -2554,6 +2555,9 @@ def find_mpv(mpv):
         if os.path.isfile(path):
             return [path]
     if os.name == "nt":
+        for path in sorted(glob.glob(os.path.join(cache_dir(), "mpv", "*", "mpv.exe")),
+                           reverse=True):
+            return [path]               # the copy toranime downloaded from mpv's own releases
         pkgs = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages")
         for path in glob.glob(os.path.join(pkgs, "*mpv*", "**", "mpv.exe"), recursive=True):
             return [path]
@@ -2562,6 +2566,87 @@ def find_mpv(mpv):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         return ["flatpak", "run", "io.mpv.Mpv"]
     return None
+
+
+# mpv's own releases (github.com/mpv-player/mpv) are built by the project's CI, and
+# every asset carries a SHA-256 in the API plus a detached .asc. the zip is the same one
+# Scoop installs, hash for hash: no repack, no third-party installer, nothing to trust
+# beyond mpv's own repository.
+MPV_RELEASE_API = "https://api.github.com/repos/mpv-player/mpv/releases/latest"
+
+
+def mpv_arch():
+    """"x86_64" or "aarch64", as mpv names its Windows builds."""
+    return ("aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64")
+
+
+def official_mpv_release(arch=None):
+    """the official Windows build for this machine, or None.
+    -> {"version", "url", "sha256", "size"}; the hash is the digest GitHub publishes
+    for that asset, not something this program ships and could get stale."""
+    arch = arch or mpv_arch()
+    try:
+        data = fetch_json(MPV_RELEASE_API, {"Accept": "application/vnd.github+json"},
+                          timeout=15)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    version = str(data.get("tag_name") or "").strip().lstrip("vV")
+    want = f"mpv-v{version}-{arch}-w64-mingw32-full.zip"
+    for asset in data.get("assets") or []:
+        digest = str(asset.get("digest") or "")
+        if asset.get("name") == want and digest.startswith("sha256:"):
+            return {"version": version, "url": asset.get("browser_download_url"),
+                    "sha256": digest[len("sha256:"):].lower(), "size": asset.get("size") or 0}
+    return None
+
+
+def download_mpv(release):
+    """fetch, verify and unpack an official build into the cache folder -> argv prefix,
+    or None. nothing is unpacked before the SHA-256 matches, so a tampered or truncated
+    download leaves nothing behind."""
+    version = release["version"]
+    folder = os.path.join(cache_dir(), "mpv", version)
+    exe = os.path.join(folder, "mpv.exe")
+    if os.path.isfile(exe):
+        return [exe]                    # already here from an earlier run
+    size = release.get("size") or 0
+    tmp = os.path.join(cache_dir(), "mpv", f".mpv-{version}.zip")
+    try:
+        os.makedirs(os.path.dirname(tmp), exist_ok=True)
+        sys.stderr.write(f"downloading mpv {version}"
+                         + (f" ({human_size(size)})" if size else "")
+                         + " from mpv's own releases...\n")
+        digest = hashlib.sha256()
+        with urllib.request.urlopen(urllib.request.Request(release["url"], headers=UA),
+                                    timeout=60) as r, open(tmp, "wb") as out:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                out.write(chunk)
+        if digest.hexdigest().lower() != release["sha256"]:
+            raise ValueError("the download does not match the published SHA-256")
+        with zipfile.ZipFile(tmp) as z:
+            for name in z.namelist():
+                if os.path.isabs(name) or ".." in name.replace("\\", "/").split("/"):
+                    raise ValueError("the mpv zip has an unsafe path")
+            z.extractall(folder)
+        if not os.path.isfile(exe):
+            raise ValueError("the mpv zip has no mpv.exe")
+        sys.stderr.write(f"mpv {version} verified and unpacked: {exe}\n")
+        return [exe]
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as e:
+        sys.stderr.write(f"mpv download failed: {e}\n")
+        shutil.rmtree(folder, ignore_errors=True)
+        return None
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _sudo(cmd):
@@ -2583,6 +2668,19 @@ def ensure_player(mpv, assume_yes=False):
         sys.exit(f"mpv not found at {mpv}")
 
     sys.stderr.write("mpv (the video player toranime streams into) is not installed.\n")
+    if _os_key() == "nt":
+        # mpv's own build first: one zip, no repack, no installer, no admin rights
+        release = official_mpv_release()
+        where = f"mpv {release['version']}" if release else "mpv"
+        size = f" ({human_size(release['size'])} zip)" if release and release.get("size") else ""
+        if (assume_yes or interactive_ok()) and (assume_yes or ask(
+                f"install {where} from mpv's own releases?{size}  "
+                f"SHA-256 checked, no installer [Y/n] ").strip().lower() not in ("n", "no")):
+            cmd = download_mpv(release) if release else None
+            if cmd:
+                sys.stderr.write(f"mpv ready: {' '.join(cmd)}\n")
+                return cmd
+            sys.stderr.write("the official download didn't work; trying a package manager.\n")
     candidates = [(mgr, [_sudo(c) for c in steps])
                   for mgr, steps in MPV_INSTALL[_os_key()] if shutil.which(mgr)]
     if not candidates:

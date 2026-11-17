@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.7] - 2026-11-16
+
+### Changed
+
+- **Windows installs mpv from mpv's own releases.** With no mpv on the machine, toranime
+  now downloads the official Windows build from github.com/mpv-player/mpv — the same zip
+  Scoop installs, hash for hash — checks the SHA-256 GitHub publishes for it, and unpacks
+  it into the app's cache folder. One zip, no installer, no admin rights, nothing
+  unpacked unless the hash matches. Scoop and Chocolatey stay as fallbacks.
+- **winget's `shinchiro.mpv` is gone.** It was not mpv's release: it is an unrelated
+  project's repack of it in its own unsigned installer, which is the opposite of what
+  toranime should offer a first-time Windows user.
+
 ## [2.2.6] - 2026-11-16
 
 ### Added

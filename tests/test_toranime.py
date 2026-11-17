@@ -11,6 +11,7 @@ one is installed, and are skipped otherwise.
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -23,6 +24,7 @@ import time
 import unittest
 import urllib.error
 import urllib.parse
+import zipfile
 from unittest import mock
 
 # the update check talks to GitHub: tests never do (UpdateCheck turns it back on)
@@ -1008,6 +1010,91 @@ class UpdateCheck(unittest.TestCase):
                 mock.patch.object(toranime, "update_notice") as notice:
             run_main()
         notice.assert_not_called()
+
+
+class OfficialMpv(unittest.TestCase):
+    """Windows gets mpv from mpv's own GitHub release, and the hash is checked first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patch = mock.patch.object(toranime, "cache_dir", return_value=self.tmp.name)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    @staticmethod
+    def payload():
+        """a stand-in for mpv's zip: its bytes and their SHA-256."""
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, "w") as z:
+            z.writestr("mpv.exe", b"MZ not really mpv")
+            z.writestr("LICENSE.GPL", b"GPL")
+        data = raw.getvalue()
+        return data, hashlib.sha256(data).hexdigest()
+
+    @staticmethod
+    def release(sha, size=1234):
+        return {"version": "9.9.9", "url": "https://example.invalid/mpv.zip",
+                "sha256": sha, "size": size}
+
+    def download(self, release, data):
+        class Fake(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(toranime.urllib.request, "urlopen", return_value=Fake(data)), \
+                contextlib.redirect_stderr(io.StringIO()):
+            return toranime.download_mpv(release)
+
+    def test_a_matching_hash_is_unpacked_and_then_reused(self):
+        data, sha = self.payload()
+        exe = os.path.join(self.tmp.name, "mpv", "9.9.9", "mpv.exe")
+        self.assertEqual(self.download(self.release(sha), data), [exe])
+        self.assertTrue(os.path.isfile(exe))
+        self.assertEqual(os.listdir(os.path.join(self.tmp.name, "mpv")), ["9.9.9"])  # zip is gone
+        with mock.patch.object(toranime.urllib.request, "urlopen") as fetch:
+            self.assertEqual(toranime.download_mpv(self.release(sha)), [exe])
+        fetch.assert_not_called()          # the unpacked copy is reused
+
+    def test_a_wrong_hash_unpacks_nothing(self):
+        data, _ = self.payload()
+        self.assertIsNone(self.download(self.release("0" * 64), data))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "mpv", "9.9.9")))
+
+    def test_the_asset_must_be_mpvs_own_windows_zip(self):
+        asset = {"name": "mpv-v9.9.9-x86_64-w64-mingw32-full.zip",
+                 "browser_download_url": "https://example.invalid/mpv.zip",
+                 "digest": "sha256:" + "a" * 64, "size": 7}
+        with mock.patch.object(toranime, "fetch_json",
+                               return_value={"tag_name": "v9.9.9", "assets": [asset]}):
+            self.assertEqual(toranime.official_mpv_release("x86_64"),
+                             {"version": "9.9.9", "url": "https://example.invalid/mpv.zip",
+                              "sha256": "a" * 64, "size": 7})
+            self.assertIsNone(toranime.official_mpv_release("aarch64"))   # not published
+        with mock.patch.object(toranime, "fetch_json", return_value={"assets": [asset]}):
+            self.assertIsNone(toranime.official_mpv_release("x86_64"))    # no tag, no digest
+
+    def test_winget_is_not_offered_anymore(self):
+        self.assertNotIn("winget", [mgr for mgr, _ in toranime.MPV_INSTALL["nt"]])
+
+    def test_windows_offers_the_official_release_before_any_manager(self):
+        with mock.patch.object(toranime, "_os_key", return_value="nt"), \
+                mock.patch.object(toranime, "find_mpv", return_value=None), \
+                mock.patch.object(toranime, "official_mpv_release",
+                                  return_value=self.release("a" * 64)), \
+                mock.patch.object(toranime, "download_mpv",
+                                  return_value=[r"C:\mpv\mpv.exe"]) as download, \
+                mock.patch.object(toranime, "interactive_ok", return_value=True), \
+                mock.patch.object(toranime.shutil, "which", return_value="/usr/bin/scoop"), \
+                mock.patch("builtins.input", return_value=""), \
+                mock.patch.object(toranime.subprocess, "run") as run, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(toranime.ensure_player("mpv"), [r"C:\mpv\mpv.exe"])
+        download.assert_called_once()
+        run.assert_not_called()            # no package manager had to run
 
 
 # ------------------------------------------------------------------ playback
