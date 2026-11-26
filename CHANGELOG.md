@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.12] - 2026-11-26
+
+### Added
+
+- **`toranime --doctor` checks a whole install at once** and prints one plain-text page
+  made for pasting into an issue: the TorBox key's path, size and mode (never the key)
+  and the account's email and plan, mpv with the way it was found and its version, the
+  meta and stream addons (reachable, what they call themselves, then a real search and a
+  real release lookup with how many TorBox has cached), SeaDex's API and the age of its
+  cache, and the AniList mapping, its cache and the saved login. Every line is `[ok]`,
+  `[!!]` or `[--]`; the last lines name what needs attention, and the exit status is 1
+  when something does.
+- Addon URLs are reduced to their host, so an AIOStreams config in `sources.json` never
+  ends up in the paste, and neither does the TorBox key or an AniList token — a broken
+  install can go into an issue as it is.
+
 ## [2.2.11] - 2026-11-17
 
 ### Changed

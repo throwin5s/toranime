@@ -29,6 +29,7 @@ Usage:
   python toranime.py kitsu:10740 --list                 # print every episode then exit
   python toranime.py "one piece" 1151 --dub --print     # print the stream url, don't launch mpv
   python toranime.py --setup                            # find or install mpv, then exit
+  python toranime.py --doctor                           # check everything, for pasting into an issue
   python toranime.py --torbox                           # save your TorBox API key, then exit
 
 Players:
@@ -64,7 +65,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.11"
+__version__ = "2.2.12"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -3203,6 +3204,231 @@ def update():
           else f"updated toranime {__version__} -> {new}")
 
 
+# ------------------------------------------------------------------ doctor
+# `toranime --doctor`: everything a run depends on, on one page. paths, hosts and
+# answers only -- never the TorBox key, an AniList token, or a sources.json url that
+# carries a private config in its path. plain ASCII lines, so it survives any paste.
+
+def doc_host(url):
+    """an addon url -> just its host: a sources.json url can carry a private config."""
+    try:
+        return urllib.parse.urlsplit(str(url)).netloc or str(url).split("/")[0]
+    except (AttributeError, ValueError):
+        return "?"
+
+
+def mpv_version(cmd):
+    """the first line of `mpv --version`, or "" when it won't run."""
+    try:
+        done = subprocess.run([*cmd, "--version"], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = done.stdout.decode("utf-8", "replace").splitlines()
+    return lines[0].strip() if lines else ""
+
+
+def mpv_where(cmd, wanted):
+    """how find_mpv found mpv: flatpak, toranime's own download, --mpv, PATH, a folder."""
+    if cmd[0] == "flatpak":
+        return "flatpak (io.mpv.Mpv)"
+    path = os.path.abspath(cmd[0])
+    downloaded = os.path.abspath(os.path.join(cache_dir(), "mpv"))
+    if path == downloaded or path.startswith(downloaded + os.sep):
+        return f"downloaded by toranime ({cmd[0]})"
+    if wanted != "mpv" and os.path.abspath(wanted) == path:
+        return f"the path you gave ({cmd[0]})"
+    on_path = shutil.which(wanted)
+    if on_path and os.path.abspath(on_path) == path:
+        return f"PATH ({cmd[0]})"
+    return f"an install folder ({cmd[0]})"
+
+
+def _doc_age(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 3600:
+        return f"{seconds // 60} min ago"
+    if seconds < 48 * 3600:
+        return f"{seconds // 3600} h ago"
+    return f"{seconds // 86400} days ago"
+
+
+def _doc_entries(path):
+    """a state json file -> (entries, newest `at` timestamp). a broken file is 0."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return 0, 0.0
+    if not isinstance(data, dict):
+        return 0, 0.0
+    newest = 0.0
+    for value in data.values():
+        at = value.get("at") if isinstance(value, dict) else None
+        if isinstance(at, (int, float)):
+            newest = max(newest, float(at))
+    return len(data), newest
+
+
+def doctor(mpv="mpv"):
+    """every check a run depends on -> an exit code: 0 when nothing needs attention."""
+    out, bad = [], []
+
+    def line(level, label, text):
+        out.append(f"[{level:<2}] {label:<16} {text}")
+        if level == "!!":
+            bad.append(label)
+
+    line("--", "toranime", f"{__version__} (checked {time.strftime('%Y-%m-%d %H:%M')})")
+    line("--", "python", f"{platform.python_version()} ({sys.platform}, {platform.machine()})")
+    line("--", "app", os.path.abspath(__file__))
+    line("--", "config", config_dir() + ("" if os.path.isdir(config_dir()) else " (missing)"))
+    line("--", "state", state_dir() + ("" if os.path.isdir(state_dir()) else " (missing)"))
+
+    out.append("")
+    out.append("TorBox")
+    key = saved_key()
+    key_path = config_file("torbox.key")
+    if not key:
+        line("!!", "key", f"no key saved - run toranime --torbox (writes {key_path})")
+    else:
+        detail = f"{key_path} ({len(key)} characters"
+        if os.name == "nt":
+            detail += ")"       # Windows has no readable permission bits
+        else:
+            try:
+                detail += f", mode {os.stat(key_path).st_mode & 0o777:03o})"
+            except OSError:
+                detail += ")"
+        line("ok", "key", detail)
+        try:
+            line("ok", "account", who_label(torbox_who(key)))
+        except TorboxError as e:
+            line("!!", "account", f"TorBox rejected the key: {e}")
+        except (OSError, ValueError) as e:
+            line("!!", "account", f"TorBox did not answer: {e}")
+
+    out.append("")
+    out.append("mpv")
+    if ANDROID:
+        line("--", "player", "mpv-android app plays instead (Termux)")
+    else:
+        cmd = find_mpv(mpv)
+        if not cmd:
+            line("!!", "player", "not found - toranime --setup, or --mpv /path/to/mpv")
+        else:
+            line("ok", "player", mpv_where(cmd, mpv))
+            version = mpv_version(cmd)
+            line("ok" if version else "!!", "version",
+                 version or "mpv did not answer --version")
+
+    out.append("")
+    out.append("addons")
+    cfg = sources()
+    where = "from sources.json" if os.path.exists(config_file("sources.json")) else "default"
+    for kind in ("meta", "stream"):
+        host = doc_host(cfg[kind])
+        try:
+            man = addon_get(cfg[kind], "manifest.json", timeout=15) or {}
+            name = str(man.get("name") or man.get("id") or "?")
+            version = str(man.get("version") or "").strip()
+            line("ok", f"{kind} addon", f"{host} - {name}"
+                 + (f" {version}" if version else "") + f" ({where})")
+        except (OSError, ValueError, AttributeError) as e:
+            line("!!", f"{kind} addon", f"{host} - {e} ({where})")
+
+    probe = None
+    try:
+        hits = search("one piece")
+        line("ok" if hits else "!!", "meta search",
+             f"'one piece' -> {len(hits)} result(s)"
+             + (f", first {hits[0]['id']}" if hits else " (the addon may have changed)"))
+        if hits:
+            got = load_anime(hits[0]["id"])
+            if got and got[1]:
+                probe = (got[0], got[1][0])
+            else:
+                line("!!", "meta episodes", f"{hits[0]['id']} has none")
+    except (OSError, ValueError, AttributeError) as e:
+        line("!!", "meta search", f"'one piece' -> {e}")
+    if probe:
+        anime, ep = probe
+        what = f"{anime.get('_key')} episode {epnum(ep)}"
+        try:
+            found = streams(anime, ep)
+            text = f"{what} -> {len(found)} release(s)"
+            if found and key:
+                hashes = [s["infoHash"] for s in found if s.get("infoHash")]
+                text += f", {len(torbox_cached(hashes))} cached on TorBox"
+            line("ok" if found else "!!", "stream probe", text)
+        except (OSError, ValueError, AttributeError, RuntimeError) as e:
+            line("!!", "stream probe", f"{what} -> {e}")
+
+    out.append("")
+    out.append("SeaDex")
+    if NO_SEADEX:
+        line("--", "lookup", "turned off with --no-seadex")
+    else:
+        host = doc_host(SEADEX_API)
+        try:
+            query = {"filter": "(alID=21)", "expand": "trs", "perPage": "1",
+                     "fields": SEADEX_FIELDS}
+            data = fetch_json(SEADEX_API + "?" + urllib.parse.urlencode(query), timeout=15)
+            items = data.get("items") or []
+            sets = seadex_sets(items[0] if items else {})
+            line("ok" if items else "!!", "api",
+                 f"{host} - " + (f"1 entry for alID 21: {len(sets['best'])} best, "
+                                  f"{len(sets['alt'])} alternative(s)" if items else
+                                  "no entry for alID 21 (the API may have changed)"))
+        except (OSError, ValueError, AttributeError) as e:
+            line("!!", "api", f"{host} - {e}")
+    count, newest = _doc_entries(seadex_file())
+    if count:
+        when = f", newest {_doc_age(time.time() - newest)}" if newest else ""
+        line("ok", "cache", f"{seadex_file()} - {count} show(s){when}")
+    else:
+        line("--", "cache", f"{seadex_file()} - empty (filled on the first run)")
+
+    out.append("")
+    out.append("AniList")
+    host = doc_host(ANILIST_MAP_API)
+    try:
+        data = fetch_json(f"{ANILIST_MAP_API}?idType=kitsuId&idValue=10740", timeout=15)
+        mapped = ((data.get("data") or {}).get("mappings") or {}).get("anilistId")
+        line("ok" if isinstance(mapped, int) else "!!", "mapping",
+             f"{host} - kitsu:10740 -> " + (f"anilist {mapped}" if isinstance(mapped, int)
+                                            else "no mapping (SeaDex cannot match)"))
+    except (OSError, ValueError, AttributeError) as e:
+        line("!!", "mapping", f"{host} - {e} (SeaDex cannot match)")
+    count, _newest = _doc_entries(anilist_map_file())
+    line("ok" if count else "--", "map cache", f"{anilist_map_file()} - {count} show(s)")
+    token = anilist_token()
+    if not token:
+        line("--", "login", "not logged in (tracking off; toranime --anilist)")
+    else:
+        try:
+            reply = json.loads(fetch(
+                ANILIST_API, {"Authorization": f"Bearer {token}",
+                              "Content-Type": "application/json",
+                              "Accept": "application/json"},
+                json.dumps({"query": "query { Viewer { name } }"}).encode(), timeout=15))
+            name = ((reply.get("data") or {}).get("Viewer") or {}).get("name")
+            line("ok", "login", f"{name} (tracking on)" if name else
+                 "signed in (tracking on)")
+        except urllib.error.HTTPError as e:
+            line("!!", "login", f"AniList refused the saved login (HTTP {e.code}) - "
+                                 "toranime --anilist")
+        except (OSError, ValueError, AttributeError) as e:
+            line("!!", "login", f"AniList did not answer: {e}")
+
+    print("\n".join(out))
+    print()
+    print("all checks passed" if not bad
+          else f"{len(bad)} check(s) need attention: {', '.join(bad)}")
+    print("nothing here is a key or a token: safe to paste into an issue.")
+    return 0 if not bad else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description="stream anime in mpv through TorBox")
     ap.add_argument("anime", nargs="?",
@@ -3239,6 +3465,9 @@ def main():
                          "(--torbox logout to remove it)")
     ap.add_argument("--setup", action="store_true",
                     help="find or install mpv and exit (the installers run this)")
+    ap.add_argument("--doctor", action="store_true",
+                    help="check TorBox, mpv, the addons, SeaDex and AniList, print a "
+                         "pasteable diagnosis and exit (no key or token is printed)")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="install mpv without asking if it is missing (scripts, CI)")
     ap.add_argument("--update", action="store_true",
@@ -3259,6 +3488,8 @@ def main():
 
     global NO_SEADEX
     NO_SEADEX = bool(args.no_seadex)
+    if args.doctor:
+        sys.exit(doctor(args.mpv))
     if args.anilist:
         (anilist_login if args.anilist == "login" else anilist_logout)()
         return

@@ -133,6 +133,15 @@ class FakeNet:
         if url.startswith(toranime.ANILIST_MAP_API.split("/api/")[0]):
             found = {} if self.mapping is None else {"anilistId": self.mapping}
             return json.dumps({"success": True, "data": {"mappings": found}})
+        if url.startswith(toranime.SEADEX_API):
+            return json.dumps({"items": [{"expand": {"trs": [
+                {"infoHash": "a" * 40, "isBest": True},
+                {"infoHash": "c" * 40, "isBest": False}]}}]})
+        if url.startswith(toranime.ANILIST_API):
+            if (headers or {}).get("Authorization") == "Bearer bad":
+                raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, io.BytesIO(
+                    json.dumps({"errors": [{"message": "Invalid token"}]}).encode()))
+            return json.dumps({"data": {"Viewer": {"name": "viewer"}}})
         if not url.startswith(toranime.TORBOX_API):
             raise AssertionError(f"unexpected url {url}")
         if self.torbox_error:
@@ -2706,6 +2715,112 @@ class Android(unittest.TestCase):
         with mock.patch.object(toranime.subprocess, "run", side_effect=FileNotFoundError), \
                 self.assertRaisesRegex(SystemExit, "termux-am"):
             toranime.android_open("https://x")
+
+
+# ------------------------------------------------------------------ doctor
+
+class Doctor(unittest.TestCase):
+    """--doctor: one pasteable page, and no key or token anywhere on it."""
+
+    def setUp(self):
+        for target, value in (
+                ("find_mpv", lambda mpv="mpv": ["/usr/local/bin/mpv"]),
+                ("mpv_version", lambda cmd: "mpv v0.38.0"),
+                ("NO_SEADEX", False)):
+            patch = mock.patch.object(toranime, target, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.out = io.StringIO()
+
+    def doctor(self):
+        with contextlib.redirect_stdout(self.out):
+            return toranime.doctor()
+
+    def test_a_working_install_passes_and_never_shows_the_key(self):
+        with net():
+            code = self.doctor()
+        text = self.out.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("plan: standard", text)
+        self.assertIn("viewer@example.com", text)
+        self.assertIn("anime-kitsu.strem.fun", text)
+        self.assertIn("torrentio.strem.fun", text)
+        self.assertIn("kitsu:10740 -> anilist 21", text)
+        self.assertIn("mpv v0.38.0", text)
+        self.assertIn("all checks passed", text)
+        self.assertIn("safe to paste", text)
+        self.assertNotIn("test-token", text)
+
+    def test_a_missing_key_is_named_with_the_command_that_fixes_it(self):
+        path = os.path.join(toranime.config_dir(), "torbox.key")
+        with open(path, encoding="utf-8") as fh:
+            saved = fh.read()
+        os.remove(path)
+        try:
+            with net():
+                code = self.doctor()
+        finally:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(saved)
+        text = self.out.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("no key saved", text)
+        self.assertIn("toranime --torbox", text)
+
+    def test_a_rejected_key_is_reported_without_the_key(self):
+        with net(torbox_error=(401, {"success": False, "error": "BAD_TOKEN",
+                                     "detail": "That key is invalid"})):
+            code = self.doctor()
+        text = self.out.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("rejected the key", text)
+        self.assertIn("That key is invalid", text)
+        self.assertNotIn("test-token", text)
+
+    def test_a_missing_mpv_is_reported(self):
+        with mock.patch.object(toranime, "find_mpv", lambda mpv="mpv": None), net():
+            code = self.doctor()
+        text = self.out.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("not found", text)
+        self.assertIn("toranime --setup", text)
+
+    def test_a_private_addon_config_stays_out_of_the_paste(self):
+        path = os.path.join(toranime.config_dir(), "sources.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"stream": "https://torrentio.strem.fun/private-config-abc/manifest.json"}, fh)
+        try:
+            with net():
+                code = self.doctor()
+        finally:
+            os.remove(path)
+        text = self.out.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("torrentio.strem.fun", text)
+        self.assertIn("from sources.json", text)
+        self.assertNotIn("private-config-abc", text)
+
+    def test_an_expired_anilist_login_is_caught(self):
+        path = toranime.anilist_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"token": "bad"}, fh)
+        try:
+            with net():
+                code = self.doctor()
+        finally:
+            os.remove(path)
+        text = self.out.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("refused the saved login", text)
+        self.assertNotIn("Bearer bad", text)
+
+    def test_main_runs_doctor_and_exits_with_its_verdict(self):
+        with net():
+            code, out, _err = run_main("--doctor")
+        self.assertEqual(code, 0)
+        self.assertIn("TorBox", out)
+        self.assertIn("safe to paste", out)
 
 
 if __name__ == "__main__":

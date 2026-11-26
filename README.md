@@ -171,11 +171,21 @@ toranime "one piece" 1151 --dub --print    # print the stream url instead of pla
 | `--no-skip` | play openings and endings instead of skipping them |
 | `--no-seadex` | don't use SeaDex's picks (keeps the old cached-first order) |
 | `--setup` | find or install mpv, then exit |
+| `--doctor` | check everything a run needs (TorBox key and plan, mpv, both addons, SeaDex, AniList) and print a diagnosis safe to paste, then exit |
 | `-y`, `--yes` | install mpv without asking if it's missing (scripts, CI) |
 | `--anilist` | log in to AniList (`--anilist logout` to stop) |
 | `--torbox` | save your TorBox API key (`--torbox logout` to remove it) |
 | `--update` | update toranime to the newest version |
 | `--no-update-check` | don't ask GitHub for a newer release on startup |
+
+### When something is wrong
+
+`toranime --doctor` checks each thing a run depends on and prints one plain-text page:
+the TorBox key's path, size and mode (never the key) and the account's plan, mpv and
+where it was found, the two addons with a real search and a real release lookup, SeaDex
+and the AniList mapping. Each line is tagged `[ok]`, `[!!]` or `[--]`, and the last lines
+name what needs attention; the exit status is 1 when something does. No key, token or
+private addon URL appears on it, so the whole page can be pasted into an issue.
 
 ## SeaDex
 
