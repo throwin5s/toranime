@@ -3,6 +3,25 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.11] - 2026-11-17
+
+### Changed
+
+- **A SeaDex pick TorBox hasn't cached no longer costs three silent minutes.** toranime
+  now asks TorBox to fetch the pick (until now it only ever added releases that were
+  already cached, so an uncached pick was refused outright and SeaDex quietly never
+  played), waits at most 20 seconds for it, and otherwise starts the best cached release
+  right away — one line says so. The fetch keeps going, so the pick leads from the next
+  play on, and during a binge it arrives while the previous episode plays.
+- Only when nothing at all is cached is the pick waited for, because then it is the only
+  thing that can play.
+
+### Fixed
+
+- The 2.2.9 note that an uncached pick would be fetched "up to 180 s" did not match the
+  code: the add was refused and the pick silently skipped. It is added for fetching now,
+  with the short wait above instead of a long one.
+
 ## [2.2.10] - 2026-11-17
 
 ### Fixed

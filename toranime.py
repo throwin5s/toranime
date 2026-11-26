@@ -64,7 +64,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.10"
+__version__ = "2.2.11"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -106,6 +106,9 @@ SEADEX_FIELDS = ("alID,trs,expand.trs.infoHash,expand.trs.isBest,expand.trs.rele
 SEADEX = {}              # anilist id -> {"best": hashes, "alt": hashes} for this run
 SEADEX_LOCK = threading.Lock()
 NO_SEADEX = False        # --no-seadex
+# a SeaDex pick TorBox has not cached is asked for anyway (so it is ready next time), but
+# a play never waits on it for more than this: the best cached release plays meanwhile.
+SEADEX_WAIT = 20
 
 # ------------------------------------------------------------------ interactive
 # single-key input: msvcrt on Windows, termios/tty on POSIX.
@@ -1266,14 +1269,16 @@ def torbox_lookup(info_hash):
     return None
 
 
-def torbox_add(stream):
-    """add a cached release to the account (or reuse it) -> its torrent id."""
+def torbox_add(stream, allow_fetch=False):
+    """add a release to the account (or reuse it) -> its torrent id. `allow_fetch` lets
+    TorBox start downloading one it has not cached: that is how a release becomes
+    playable next time, at the cost of it sitting in the account until it arrives."""
     info_hash = str(stream["infoHash"]).lower()
     known = torbox_lookup(info_hash)
     if known and known.get("id"):
         return int(known["id"])
     raw, ctype = multipart({"magnet": magnet_of(stream), "allow_zip": "false",
-                            "add_only_if_cached": "true"})
+                            "add_only_if_cached": "false" if allow_fetch else "true"})
     try:
         data = torbox("/torrents/createtorrent", raw=raw, content_type=ctype, timeout=60) or {}
     except TorboxError as e:
@@ -1366,6 +1371,13 @@ def torbox_link(torrent_id, file_id=None):
     return url
 
 
+def downloaded(torrent):
+    """has TorBox finished with this torrent, so a link can be asked for?"""
+    state = str((torrent or {}).get("download_state") or (torrent or {}).get("state") or "").lower()
+    return bool((torrent or {}).get("download_finished") or (torrent or {}).get("download_present")
+                or state in ("cached", "completed", "downloaded", "uploading"))
+
+
 def wait_download(torrent_id, verbose=True):
     """wait for TorBox to finish a release it had not cached yet -> (record, files)."""
     deadline = time.monotonic() + TORBOX_WAIT
@@ -1373,8 +1385,7 @@ def wait_download(torrent_id, verbose=True):
     while True:
         torrent, files = torbox_state(torrent_id)
         state = str(torrent.get("download_state") or torrent.get("state") or "").lower()
-        if torrent.get("download_finished") or torrent.get("download_present") or \
-                state in ("cached", "completed", "downloaded", "uploading"):
+        if downloaded(torrent):
             if shown:
                 sys.stderr.write("\n")
             return torrent, files
@@ -1389,6 +1400,27 @@ def wait_download(torrent_id, verbose=True):
                              f"{pct:.0f}%{CSI}K")
             sys.stderr.flush()
         time.sleep(3)
+
+
+def warm_pick(stream, budget=0):
+    """ask TorBox to fetch a SeaDex pick even when it is not cached, and give it `budget`
+    seconds. True when it can play now; either way TorBox keeps fetching it, so the pick
+    is cached the next time it is wanted. never raises."""
+    try:
+        tid = torbox_add(stream, allow_fetch=True)
+    except (LookupError, RuntimeError, OSError, ValueError):
+        return False
+    deadline = time.monotonic() + max(0, budget)
+    while True:
+        try:
+            torrent, _files = torbox_state(tid)
+        except (LookupError, RuntimeError, OSError, ValueError):
+            return False
+        if downloaded(torrent):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(2)
 
 
 def resolve_torrent(stream, number, season=None, verbose=True):
@@ -1422,6 +1454,20 @@ def resolve(anime, ep, lang, verbose=True):
     picked = seadex_for(anime)
     torrents.sort(key=lambda s: stream_rank(s, cached, want, picked))
     season = ep.get("imdbSeason") or ep.get("season")
+    # SeaDex first, but never at the price of three silent minutes: an uncached pick is
+    # asked for in the background (it leads from the next play on) while a cached release
+    # plays now. only when nothing is cached is the pick waited on, since it is all there is.
+    pick = next((s for s in torrents
+                 if str(s.get("infoHash") or "").lower() in picked["best"]), None)
+    if pick and str(pick.get("infoHash") or "").lower() not in cached:
+        ready = warm_pick(pick, SEADEX_WAIT)
+        rest = [s for s in torrents if s is not pick]
+        if not ready and any(str(s.get("infoHash") or "").lower() in cached for s in rest):
+            torrents = rest
+            if verbose:
+                sys.stderr.write(f"  SeaDex's pick {group_name(pick)} is still downloading on "
+                                 f"TorBox: playing the best cached release now, it leads "
+                                 f"once it has arrived\n")
     errors = []
     for stream in torrents[:MAX_TRIES]:
         try:
