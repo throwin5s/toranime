@@ -2741,8 +2741,9 @@ class Doctor(unittest.TestCase):
             code = self.doctor()
         text = self.out.getvalue()
         self.assertEqual(code, 0)
-        self.assertIn("plan: standard", text)
-        self.assertIn("viewer@example.com", text)
+        self.assertIn("v***@example.com (plan: standard)", text)
+        self.assertNotIn("viewer@example.com", text)
+        self.assertIn("torbox.key (10 characters", text)
         self.assertIn("anime-kitsu.strem.fun", text)
         self.assertIn("torrentio.strem.fun", text)
         self.assertIn("kitsu:10740 -> anilist 21", text)
@@ -2750,6 +2751,18 @@ class Doctor(unittest.TestCase):
         self.assertIn("all checks passed", text)
         self.assertIn("safe to paste", text)
         self.assertNotIn("test-token", text)
+
+    def test_the_email_is_masked_and_the_home_folder_is_shortened(self):
+        self.assertEqual(toranime.mask_email("viewer@example.com"), "v***@example.com")
+        self.assertEqual(toranime.mask_email("broken"), "***")
+        self.assertEqual(toranime.mask_email(""), "")
+        self.assertEqual(toranime.doc_account({"email": "viewer@example.com", "plan": "pro"}),
+                         "v***@example.com (plan: pro)")
+        self.assertEqual(toranime.doc_account({"email": ""}), "your account")
+        home = os.path.expanduser("~")
+        self.assertEqual(toranime.doc_path(os.path.join(home, ".config", "toranime")),
+                         os.path.join("~", ".config", "toranime"))
+        self.assertEqual(toranime.doc_path("/elsewhere/toranime"), "/elsewhere/toranime")
 
     def test_a_missing_key_is_named_with_the_command_that_fixes_it(self):
         path = os.path.join(toranime.config_dir(), "torbox.key")

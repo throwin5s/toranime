@@ -65,7 +65,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.12"
+__version__ = "2.2.13"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -3209,6 +3209,32 @@ def update():
 # answers only -- never the TorBox key, an AniList token, or a sources.json url that
 # carries a private config in its path. plain ASCII lines, so it survives any paste.
 
+def mask_email(email):
+    """an address -> only what tells you it is yours: first character and domain."""
+    local, at, domain = str(email or "").rpartition("@")
+    if not at or not domain:
+        return "***" if email else ""
+    return f"{local[:1] or '?'}***@{domain}"
+
+
+def doc_account(who):
+    """--doctor's account line: a masked email and the plan, never the address itself."""
+    email = mask_email((who or {}).get("email", ""))
+    plan = (who or {}).get("plan", "")
+    if plan:
+        return f"{email} (plan: {plan})" if email else f"your account (plan: {plan})"
+    return email or "your account"
+
+
+def doc_path(path):
+    """a path with the home folder shortened to `~`, so a paste carries less of who you are."""
+    text = str(path)
+    home = os.path.expanduser("~").rstrip(os.sep)
+    if home and home != "~" and text.startswith(home + os.sep):
+        return "~" + text[len(home):]
+    return text
+
+
 def doc_host(url):
     """an addon url -> just its host: a sources.json url can carry a private config."""
     try:
@@ -3281,18 +3307,20 @@ def doctor(mpv="mpv"):
 
     line("--", "toranime", f"{__version__} (checked {time.strftime('%Y-%m-%d %H:%M')})")
     line("--", "python", f"{platform.python_version()} ({sys.platform}, {platform.machine()})")
-    line("--", "app", os.path.abspath(__file__))
-    line("--", "config", config_dir() + ("" if os.path.isdir(config_dir()) else " (missing)"))
-    line("--", "state", state_dir() + ("" if os.path.isdir(state_dir()) else " (missing)"))
+    line("--", "app", doc_path(os.path.abspath(__file__)))
+    line("--", "config", doc_path(config_dir())
+         + ("" if os.path.isdir(config_dir()) else " (missing)"))
+    line("--", "state", doc_path(state_dir())
+         + ("" if os.path.isdir(state_dir()) else " (missing)"))
 
     out.append("")
     out.append("TorBox")
     key = saved_key()
     key_path = config_file("torbox.key")
     if not key:
-        line("!!", "key", f"no key saved - run toranime --torbox (writes {key_path})")
+        line("!!", "key", f"no key saved - run toranime --torbox (writes {doc_path(key_path)})")
     else:
-        detail = f"{key_path} ({len(key)} characters"
+        detail = f"{doc_path(key_path)} ({len(key)} characters"
         if os.name == "nt":
             detail += ")"       # Windows has no readable permission bits
         else:
@@ -3302,7 +3330,7 @@ def doctor(mpv="mpv"):
                 detail += ")"
         line("ok", "key", detail)
         try:
-            line("ok", "account", who_label(torbox_who(key)))
+            line("ok", "account", doc_account(torbox_who(key)))
         except TorboxError as e:
             line("!!", "account", f"TorBox rejected the key: {e}")
         except (OSError, ValueError) as e:
@@ -3385,9 +3413,9 @@ def doctor(mpv="mpv"):
     count, newest = _doc_entries(seadex_file())
     if count:
         when = f", newest {_doc_age(time.time() - newest)}" if newest else ""
-        line("ok", "cache", f"{seadex_file()} - {count} show(s){when}")
+        line("ok", "cache", f"{doc_path(seadex_file())} - {count} show(s){when}")
     else:
-        line("--", "cache", f"{seadex_file()} - empty (filled on the first run)")
+        line("--", "cache", f"{doc_path(seadex_file())} - empty (filled on the first run)")
 
     out.append("")
     out.append("AniList")
@@ -3401,7 +3429,8 @@ def doctor(mpv="mpv"):
     except (OSError, ValueError, AttributeError) as e:
         line("!!", "mapping", f"{host} - {e} (SeaDex cannot match)")
     count, _newest = _doc_entries(anilist_map_file())
-    line("ok" if count else "--", "map cache", f"{anilist_map_file()} - {count} show(s)")
+    line("ok" if count else "--", "map cache",
+         f"{doc_path(anilist_map_file())} - {count} show(s)")
     token = anilist_token()
     if not token:
         line("--", "login", "not logged in (tracking off; toranime --anilist)")

@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.13] - 2026-11-26
+
+### Changed
+
+- **`--doctor` masks the TorBox email and shortens the home folder in paths.** The page
+  says it is safe to paste into an issue, so the account now reads
+  `v***@example.com (plan: standard)`: the first character and the domain, enough to
+  recognise it without publishing the address. Paths under your home folder print with
+  `~` in front. The key line is still only its path, length and mode.
+
 ## [2.2.12] - 2026-11-26
 
 ### Added
