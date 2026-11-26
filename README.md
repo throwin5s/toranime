@@ -196,7 +196,7 @@ By default toranime takes SeaDex's pick when the show has one, and otherwise the
 }
 ```
 
-- `prefer_groups` wins over resolution, so a preferred group at 720p still beats someone else's 2160p. `avoid_groups` is the opposite. Names are matched against the first `[bracket]` of a release name, case-insensitively.
+- `prefer_groups` wins over resolution, so a preferred group at 720p still beats someone else's 2160p. `avoid_groups` is the opposite. Names are matched against the first `[bracket]` of a release name, case-insensitively. Quality, source and language tags (`[TV]`, `[BDRip+WEB]`, `[MX-EN-PT]`) are not groups; a release that names no group is labelled with its tracker instead.
 - `min_height` (720, 1080, 2160) and `max_size` (GB per release) are penalties, not filters: a release you capped out is used only when it is the only one cached, so a preference never leaves you with nothing to play.
 - A preferred group also outranks SeaDex's pick, and cached otherwise still comes first: a preferred group TorBox has not cached may have to be fetched.
 

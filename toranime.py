@@ -64,7 +64,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.9"
+__version__ = "2.2.10"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -959,12 +959,35 @@ def is_dub(stream):
 
 # release names put the group in the first [bracket]. these are the tags that are not one.
 QUALITY_TAGS = {
-    "bd", "bdrip", "bluray", "blu-ray", "web", "webdl", "web-dl", "webrip", "hdtv", "dvd",
+    "bd", "bdrip", "bluray", "blu-ray", "bdremux", "web", "webdl", "web-dl", "webrip",
+    "hdtv", "dvd", "tv", "special", "ova", "movie", "complete", "batch", "unofficial",
     "hevc", "x265", "x264", "h264", "h265", "av1", "10bit", "8bit", "12bit", "hi10p",
     "dual", "dual-audio", "multi", "multi-audio", "multi-subs", "multi-sub", "dual-audio+multi-subs",
-    "aac", "ac3", "eac3", "flac", "opus", "dts", "hdr", "dv", "sdr", "sub", "subs",
-    "dub", "eng", "jpn", "japanese", "english", "uncensored", "remux", "complete", "repack",
+    "multiple", "subtitle", "subtitles", "aac", "ac3", "eac3", "flac", "opus", "dts",
+    "hdr", "dv", "sdr", "sub", "subs", "dub", "uncensored", "remux", "repack",
+    # languages and regions, which releases also put in brackets
+    "eng", "english", "jpn", "japanese", "jap", "rus", "ru", "en", "es", "fr", "de",
+    "it", "pt", "br", "lat", "mx", "us", "uk", "cn", "tw", "kr", "kor", "chi", "ext",
 }
+
+
+def tag_is_not_a_group(tag):
+    """is this bracket a quality, source or language tag rather than the group's name?
+    [TV], [BDRip+WEB], [MX-EN-PT], [10 + 2 из 10 + 2] and [1080p] are all not groups."""
+    low = re.sub(r"\([^)]*\)", " ", tag).strip().lower().strip(".")
+    if re.fullmatch(r"\d{3,4}p", low) or low in QUALITY_TAGS:
+        return True
+    if re.fullmatch(r"[0-9A-Fa-f]{6,}", tag.strip()):
+        return True                # a file id or hash fragment, not a group
+    # every separator a tag uses: [TV+Special], [MX-EN-PT], [BD 1080p]. a real group
+    # survives it: [-ZR-] -> ["-zr-"], [F-R] -> ["f", "r"], [Erai-raws] -> two words
+    parts = [p for p in re.split(r"[+_,;/\s.-]+", low) if p]
+    if not parts:
+        return True
+    def known(part):
+        return part in QUALITY_TAGS or bool(re.fullmatch(r"\d{3,4}p", part))
+
+    return any(p.isdigit() for p in parts) or all(known(p) for p in parts)
 
 
 def release_group(stream):
@@ -975,10 +998,23 @@ def release_group(stream):
         tag = tag.strip()
         if not tag or " " in tag:
             continue
-        if tag.lower().strip(".") in QUALITY_TAGS or re.fullmatch(r"(?i)\d{3,4}p", tag):
+        if tag_is_not_a_group(tag):
             continue
         return tag
     return None
+
+
+def release_source(stream):
+    """the tracker Torrentio names in its label (⚙️ NyaaSi). for a release that names no
+    group there is still something to show, and it is at least true."""
+    m = re.search("\u2699\ufe0f?\\s*([A-Za-z0-9][A-Za-z0-9.!+_-]{0,23})", stream_text(stream))
+    return m.group(1) if m else ""
+
+
+def group_name(stream):
+    """the first column of a release row: its group, else where it came from."""
+    group = release_group(stream)
+    return f"[{group}]" if group else release_source(stream)
 
 
 def size_bytes(text):
@@ -1414,11 +1450,13 @@ def group_candidates(anime, ep, lang):
     found.sort(key=lambda s: stream_rank(s, cached, prefs(), picked))
     best, seen = [], set()
     for s in found:
-        group = (release_group(s) or "-").lower()
-        if group in seen:
+        group = release_group(s)
+        # releases with no group are not one group: each stays its own row
+        key = group.lower() if group else "~" + stream_text(s)[:60].lower()
+        if key in seen:
             continue
-        seen.add(group)
-        best.append((release_group(s) or "no group", s))
+        seen.add(key)
+        best.append((group, s))
     return best, cached
 
 
@@ -1433,7 +1471,8 @@ def group_label(group, s, cached, seadex=None):
     tag = seadex_tag(s, seadex)
     tag = tag + " " if tag else ""
     room = 54 - (10 if tag else 0)          # the pink tag must not push the row wider
-    return (f"[{group}] {state:<10} {human_size(size) if size else '?':>9}  "
+    name = f"[{group}]" if group else release_source(s)
+    return (f"{name:<14} {state:<10} {human_size(size) if size else '?':>9}  "
             f"{tag}{text[:max(12, room)]}")
 
 
@@ -1457,7 +1496,8 @@ def choose_group(anime, ep, lang):
         group = chosen[0] if chosen else None
     else:
         options = [(group_label(g, s, cached, picked), g) for g, s in groups]
-        options.append((f"top pick (now [{groups[0][0]}]) - press Enter", None))
+        now = f" (now [{groups[0][0]}])" if groups[0][0] else ""
+        options.append((f"top pick{now} - press Enter", None))
         group = options[menu_pick(options, len(options) - 1,
                                   f"\nreleases for {ep_label(ep)}:")][1]
     if group:
@@ -1485,7 +1525,7 @@ def pick_release(anime, ep, lang):
         tag = seadex_tag(s, picked)
         tag = tag + " " if tag else ""
         room = 54 - (10 if tag else 0)
-        return (f"{(release_group(s) or '-'):<14} {human_size(size) if size else '?':>9} "
+        return (f"{group_name(s):<14} {human_size(size) if size else '?':>9} "
                 f"{state:<10} {tag}{text[:max(12, room)]}")
 
     chosen = fuzzy_pick(found[:25], label, f"\n{ep_label(ep)}: releases (best first):",

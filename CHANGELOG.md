@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.10] - 2026-11-17
+
+### Fixed
+
+- **A `[bracket]` is not always a release group.** Tags like `[TV]`, `[TV+Special]`,
+  `[BDRip+WEB]`, `[MX-EN-PT]` and `[10+2 из 10+2]` were shown as group names (and
+  `prefer_groups` would have matched them). They are recognised as quality, source or
+  language tags now, so the menu shows the real groups — `Erai-raws`, `HorribleSubs`,
+  `PuyaSubs!` — or where the release came from.
+- **"no group" is gone.** Releases that name no group used to be merged into one
+  `[no group]` row, hiding the others; each keeps its own row now, and the first column
+  shows the tracker Torrentio names (`NyaaSi`, `HorribleSubs`) rather than a placeholder.
+  The default row reads `top pick (now [X])`, or `top pick - press Enter` when the top
+  release names no group.
+
 ## [2.2.9] - 2026-11-17
 
 ### Added

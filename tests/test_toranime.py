@@ -423,7 +423,8 @@ class Pipeline(unittest.TestCase):
         labels = [label for label, _ in seen["options"]]
         self.assertEqual([group for _, group in seen["options"]], ["Judas", "Sokudo", None])
         self.assertEqual(seen["default"], len(labels) - 1)        # Enter = the automatic pick
-        self.assertIn("[Judas] cached", labels[0])
+        self.assertIn("[Judas]", labels[0])
+        self.assertIn("cached", labels[0])
         self.assertIn("1080p", labels[0])                        # the group's best release
         self.assertTrue(labels[-1].startswith("top pick"))
         self.assertNotIn("prefer_groups", toranime.PICK)          # Enter changed nothing
@@ -464,7 +465,8 @@ class Pipeline(unittest.TestCase):
         menu.assert_not_called()
         self.assertEqual(seen["noun"], "release groups")
         self.assertEqual(len(seen["items"]), 12)                  # nothing dropped
-        self.assertIn(f"[{seen['items'][9][0]}] cached", seen["labels"][9])
+        self.assertIn(f"[{seen['items'][9][0]}]", seen["labels"][9])
+        self.assertIn("cached", seen["labels"][9])
         self.assertEqual(toranime.PICK["prefer_groups"], [seen["items"][9][0]])
         with mock.patch.object(toranime, "streams", lambda a, e: many), \
                 mock.patch.object(toranime, "torbox_cached", lambda hashes: set(hashes)), \
@@ -1872,6 +1874,45 @@ class SeaDex(unittest.TestCase):
                 mock.patch.object(toranime, "find_anime", side_effect=SystemExit(0)):
             run_main("--no-seadex", "one piece")
         self.assertTrue(toranime.NO_SEADEX)
+
+
+class ReleaseNames(unittest.TestCase):
+    """a [bracket] is not automatically a group: quality tags and file ids are not."""
+
+    def test_quality_and_language_tags_are_not_groups(self):
+        for tag in ("TV", "TV+Special", "BDRip+WEB", "MX-EN-PT", "10+2 из 10+2",
+                    "RUS(ext) JAP", "1080p", "WEB-DL", "BD 1080p", "1080p HEVC",
+                    "Multiple Subtitle", "2018 BDRip", "F95DE7B0"):
+            self.assertTrue(toranime.tag_is_not_a_group(tag), tag)
+
+    def test_real_groups_survive(self):
+        for tag in ("A&C", "Erai-raws", "-ZR-", "F-R", "HorribleSubs", "PuyaSubs!",
+                    "DameDesuYo", "15GB", "SubsPlease", "anti-raws", "sam"):
+            self.assertFalse(toranime.tag_is_not_a_group(tag), tag)
+
+    def test_a_release_that_names_no_group_says_where_it_came_from(self):
+        stream = {"infoHash": "a" * 40,
+                  "title": "Märchen Mädchen / Marchen Madchen 01-12 (BD 1920x1080 x264)"
+                           "\nMarchen Madchen - 01 (BD).mkv\n👤 4 💾 1.08 GB ⚙️ NyaaSi"}
+        self.assertIsNone(toranime.release_group(stream))
+        self.assertEqual(toranime.release_source(stream), "NyaaSi")
+        label = toranime.group_label(None, stream, set())
+        self.assertIn("NyaaSi", label)
+        self.assertNotIn("no group", label)
+
+    def test_a_tag_only_title_still_names_no_group(self):
+        self.assertIsNone(toranime.release_group({"title": "Show [TV+Special] [1080p]"}))
+
+    def test_releases_without_a_group_stay_separate_rows(self):
+        one = {"infoHash": "a" * 40, "title": "Show 01 [1080p] ⚙️ NyaaSi"}
+        two = {"infoHash": "b" * 40, "title": "Show 01 [720p] ⚙️ NyaaSi"}
+        with mock.patch.object(toranime, "streams", lambda a, e: [one, two]), \
+                mock.patch.object(toranime, "torbox_cached", lambda hashes: set()), \
+                mock.patch.object(toranime, "prefs", lambda: {}):
+            groups, _ = toranime.group_candidates(ANIME, EPISODES[1], "sub")
+        self.assertEqual([g for g, _ in groups], [None, None])    # two rows, not one
+        self.assertNotIn("no group", " ".join(toranime.group_label(g, s, set())
+                                              for g, s in groups))
 
 
 # ------------------------------------------------------------------ player setup
