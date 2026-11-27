@@ -65,7 +65,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.14"
+__version__ = "2.2.15"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -1461,14 +1461,17 @@ def resolve(anime, ep, lang, verbose=True):
     pick = next((s for s in torrents
                  if str(s.get("infoHash") or "").lower() in picked["best"]), None)
     if pick and str(pick.get("infoHash") or "").lower() not in cached:
-        ready = warm_pick(pick, SEADEX_WAIT)
         rest = [s for s in torrents if s is not pick]
-        if not ready and any(str(s.get("infoHash") or "").lower() in cached for s in rest):
+        if any(str(s.get("infoHash") or "").lower() in cached for s in rest):
+            # something can play right now: ask for the pick without standing in its way
+            in_background(warm_pick, pick, 0)
             torrents = rest
             if verbose:
-                sys.stderr.write(f"  SeaDex's pick {group_name(pick)} is still downloading on "
-                                 f"TorBox: playing the best cached release now, it leads "
-                                 f"once it has arrived\n")
+                sys.stderr.write(f"  SeaDex's pick {group_name(pick)} is not cached yet: "
+                                 f"playing the best cached release now, it leads once it "
+                                 f"has arrived\n")
+        else:
+            warm_pick(pick, SEADEX_WAIT)     # nothing else can play: waiting is the only way
     errors = []
     for stream in torrents[:MAX_TRIES]:
         try:

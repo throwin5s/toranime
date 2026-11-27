@@ -1816,49 +1816,7 @@ class SeaDex(unittest.TestCase):
         self.assertLess(toranime.stream_rank(mine, set(), None, sd),
                         toranime.stream_rank(other, {"c" * 40}, None, sd))
 
-    def test_a_warm_pick_is_the_one_that_plays(self):
-        pick = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
-        better = {"infoHash": "c" * 40, "title": "[X] ONE PIECE 1151 [2160p]"}
-        seen = {}
-
-        def fake_resolve(stream, number, season=None, verbose=True):
-            seen["stream"] = stream
-            return "https://example.invalid/link", {}
-
-        with mock.patch.object(toranime, "streams", lambda a, e: [better, pick]), \
-                mock.patch.object(toranime, "torbox_cached", lambda hashes: {"c" * 40}), \
-                mock.patch.object(toranime, "seadex_for",
-                                  lambda a: {"best": {"a" * 40}, "alt": set()}), \
-                mock.patch.object(toranime, "warm_pick", return_value=True) as warm, \
-                mock.patch.object(toranime, "resolve_torrent", fake_resolve), \
-                mock.patch.object(toranime, "prefs", lambda: {}):
-            toranime.resolve(ANIME, EPISODES[1], "sub")
-        warm.assert_called_once()                                 # asked for, not skipped
-        self.assertEqual(seen["stream"]["infoHash"], "a" * 40)   # SeaDex over cached 4K
-
-    def test_a_pick_that_is_not_ready_never_holds_up_the_play(self):
-        pick = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
-        cached_release = {"infoHash": "c" * 40, "title": "[Judas] ONE PIECE 1151 [1080p]"}
-        seen = {}
-
-        def fake_resolve(stream, number, season=None, verbose=True):
-            seen["stream"] = stream
-            return "https://example.invalid/link", {}
-
-        with mock.patch.object(toranime, "streams", lambda a, e: [pick, cached_release]), \
-                mock.patch.object(toranime, "torbox_cached", lambda hashes: {"c" * 40}), \
-                mock.patch.object(toranime, "seadex_for",
-                                  lambda a: {"best": {"a" * 40}, "alt": set()}), \
-                mock.patch.object(toranime, "warm_pick", return_value=False) as warm, \
-                mock.patch.object(toranime, "resolve_torrent", fake_resolve), \
-                mock.patch.object(toranime, "prefs", lambda: {}), \
-                contextlib.redirect_stderr(io.StringIO()) as err:
-            toranime.resolve(ANIME, EPISODES[1], "sub")
-        warm.assert_called_once()                                 # still asked for, in the background
-        self.assertEqual(seen["stream"]["infoHash"], "c" * 40)   # the cached one plays now
-        self.assertIn("still downloading", err.getvalue())
-
-    def test_the_only_release_left_is_still_waited_for(self):
+    def test_a_pick_that_is_ready_plays_when_nothing_else_is_cached(self):
         pick = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
         seen = {}
 
@@ -1870,12 +1828,66 @@ class SeaDex(unittest.TestCase):
                 mock.patch.object(toranime, "torbox_cached", lambda hashes: set()), \
                 mock.patch.object(toranime, "seadex_for",
                                   lambda a: {"best": {"a" * 40}, "alt": set()}), \
-                mock.patch.object(toranime, "warm_pick", return_value=False), \
+                mock.patch.object(toranime, "warm_pick", return_value=True) as warm, \
+                mock.patch.object(toranime, "resolve_torrent", fake_resolve), \
+                mock.patch.object(toranime, "prefs", lambda: {}):
+            toranime.resolve(ANIME, EPISODES[1], "sub")
+        warm.assert_called_once_with(pick, toranime.SEADEX_WAIT)  # nothing else can play
+        self.assertEqual(seen["stream"]["infoHash"], "a" * 40)
+
+    def test_an_uncached_pick_costs_a_cached_release_no_wait(self):
+        pick = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
+        cached_release = {"infoHash": "c" * 40, "title": "[Judas] ONE PIECE 1151 [1080p]"}
+        seen, started = {}, threading.Event()
+
+        def fake_resolve(stream, number, season=None, verbose=True):
+            seen["stream"] = stream
+            return "https://example.invalid/link", {}
+
+        def fake_warm(stream, budget=0):
+            seen["budget"], seen["thread"] = budget, threading.current_thread()
+            started.set()
+            return False
+
+        with mock.patch.object(toranime, "streams", lambda a, e: [pick, cached_release]), \
+                mock.patch.object(toranime, "torbox_cached", lambda hashes: {"c" * 40}), \
+                mock.patch.object(toranime, "seadex_for",
+                                  lambda a: {"best": {"a" * 40}, "alt": set()}), \
+                mock.patch.object(toranime, "warm_pick", fake_warm), \
+                mock.patch.object(toranime, "resolve_torrent", fake_resolve), \
+                mock.patch.object(toranime, "prefs", lambda: {}), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            toranime.resolve(ANIME, EPISODES[1], "sub")
+        self.assertTrue(started.wait(5))                          # it did start
+        self.assertEqual(seen["budget"], 0)                       # no wait on the play path
+        self.assertIsNot(seen["thread"], threading.main_thread())  # warming out of the way
+        self.assertEqual(seen["stream"]["infoHash"], "c" * 40)   # the cached one plays now
+        self.assertIn("not cached yet", err.getvalue())
+
+    def test_the_only_release_left_is_still_waited_for(self):
+        pick = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
+        seen, waited = {}, {}
+
+        def fake_resolve(stream, number, season=None, verbose=True):
+            seen["stream"] = stream
+            return "https://example.invalid/link", {}
+
+        def fake_warm(stream, budget=0):
+            waited["budget"], waited["thread"] = budget, threading.current_thread()
+            return False
+
+        with mock.patch.object(toranime, "streams", lambda a, e: [pick]), \
+                mock.patch.object(toranime, "torbox_cached", lambda hashes: set()), \
+                mock.patch.object(toranime, "seadex_for",
+                                  lambda a: {"best": {"a" * 40}, "alt": set()}), \
+                mock.patch.object(toranime, "warm_pick", fake_warm), \
                 mock.patch.object(toranime, "resolve_torrent", fake_resolve), \
                 mock.patch.object(toranime, "prefs", lambda: {}), \
                 contextlib.redirect_stderr(io.StringIO()):
             toranime.resolve(ANIME, EPISODES[1], "sub")
-        self.assertEqual(seen["stream"]["infoHash"], "a" * 40)   # nothing else to play
+        self.assertEqual(waited["budget"], toranime.SEADEX_WAIT)  # nothing else can play
+        self.assertIs(waited["thread"], threading.main_thread())  # so this one waits
+        self.assertEqual(seen["stream"]["infoHash"], "a" * 40)
 
     def test_warm_pick_reports_readiness_and_never_raises(self):
         stream = {"infoHash": "a" * 40, "title": "[A&C] Show 01 [1080p]"}

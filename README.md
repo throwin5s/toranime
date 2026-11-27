@@ -194,7 +194,7 @@ pasted into an issue.
 
 [SeaDex](https://releases.moe) is a community list of the best release of each show. toranime asks it once per show per day, matches its picks to the releases your addon returns by info hash (the same torrent, not a lookalike), and puts them first: in the release menu and `--pick` they wear a pink `♥ seadex`. Alternatives SeaDex lists get a quiet `seadex alt` note and keep their normal place. Nothing about you is sent, and a show SeaDex doesn't list changes nothing.
 
-A SeaDex pick still outranks the releases TorBox has cached, but a play never waits on a fetch: when the pick isn't cached, toranime asks TorBox for it (it lands in your account, ready next time), waits 20 seconds at most, and otherwise starts the best cached release now — one line tells you which. During a binge the next episode's pick is asked for while the current one plays, so it leads by the time you get there. `--no-seadex` turns the whole thing off and restores the old order. If releases.moe can't be reached, the old order is used silently.
+A SeaDex pick still outranks the releases TorBox has cached, but a play never waits on a fetch: when the pick isn't cached and something else is, toranime starts that release now and asks TorBox for the pick in the background (it lands in your account, ready next time), so the pick leads from the next play on — one line says so. Only when nothing else is cached does it wait, up to 20 seconds. During a binge the next episode's pick is asked for while the current one plays, so it leads by the time you get there. `--no-seadex` turns the whole thing off and restores the old order. If releases.moe can't be reached, the old order is used silently.
 
 ## Your own release preferences
 

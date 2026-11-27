@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.15] - 2026-11-26
+
+### Fixed
+
+- **An uncached SeaDex pick no longer adds 20 seconds before a cached release plays.**
+  `resolve()` sat in `warm_pick()` for up to `SEADEX_WAIT` even when another release was
+  ready, so the first play of an episode could stall despite the comment saying the
+  cached release plays meanwhile. The pick is now added on a background thread and the
+  cached release starts at once; the 20-second wait remains only when nothing else can
+  play.
+
 ## [2.2.14] - 2026-11-26
 
 ### Changed
