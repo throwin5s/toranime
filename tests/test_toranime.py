@@ -121,7 +121,7 @@ class FakeNet:
         self.link, self.mapping = link, mapping
         self.calls, self.torrents = [], {}
 
-    def __call__(self, url, headers=None, data=None, timeout=None):
+    def __call__(self, url, headers=None, data=None, timeout=None, retries=None):
         self.calls.append(url)
         parts = urllib.parse.urlsplit(url)
         query = dict(urllib.parse.parse_qsl(parts.query))
@@ -1712,7 +1712,7 @@ class TorboxKey(unittest.TestCase):
     def test_who_asks_torbox_with_the_key_it_was_given(self):
         seen = {}
 
-        def fake(url, headers=None, data=None, timeout=None):
+        def fake(url, headers=None, data=None, timeout=None, retries=None):
             seen["url"], seen["auth"] = url, (headers or {}).get("Authorization")
             return json.dumps({"success": True, "data": {"email": "a@b", "plan": 1}})
 
@@ -1722,7 +1722,7 @@ class TorboxKey(unittest.TestCase):
         self.assertEqual(seen["auth"], "Bearer candidate")
         self.assertEqual(who, {"email": "a@b", "plan": "essential"})
 
-        def refused_call(url, headers=None, data=None, timeout=None):
+        def refused_call(url, headers=None, data=None, timeout=None, retries=None):
             return json.dumps({"success": False, "error": "BAD_TOKEN", "detail": "nope"})
 
         with mock.patch.object(toranime, "fetch", refused_call), \
@@ -2727,6 +2727,86 @@ class Android(unittest.TestCase):
         with mock.patch.object(toranime.subprocess, "run", side_effect=FileNotFoundError), \
                 self.assertRaisesRegex(SystemExit, "termux-am"):
             toranime.android_open("https://x")
+
+
+# ------------------------------------------------------------------ retries
+
+class Retry(unittest.TestCase):
+    """a flaky 429/5xx/timeout gets two more tries, with backoff and Retry-After."""
+
+    def setUp(self):
+        self.sleeps = []
+        patch = mock.patch.object(toranime.time, "sleep", self.sleeps.append)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    @staticmethod
+    def reply(body=b"ok"):
+        return io.BytesIO(body)
+
+    def test_a_503_is_retried_twice_with_backoff(self):
+        errors = [urllib.error.HTTPError("https://x", 503, "down", {}, io.BytesIO(b"")),
+                  urllib.error.HTTPError("https://x", 502, "bad gateway", {}, io.BytesIO(b""))]
+        with mock.patch.object(toranime.urllib.request, "urlopen",
+                               side_effect=[*errors, self.reply(b"fine")]) as opened:
+            self.assertEqual(toranime.fetch("https://x", retries=2), "fine")
+        self.assertEqual(opened.call_count, 3)
+        self.assertEqual(self.sleeps, [0.5, 1.0])
+
+    def test_a_429_honors_retry_after(self):
+        errors = [urllib.error.HTTPError("https://x", 429, "slow down",
+                                         {"Retry-After": "2"}, io.BytesIO(b"")),
+                  urllib.error.HTTPError("https://x", 429, "slow down",
+                                         {"Retry-After": "3.5"}, io.BytesIO(b""))]
+        with mock.patch.object(toranime.urllib.request, "urlopen",
+                               side_effect=[*errors, self.reply(b"fine")]):
+            self.assertEqual(toranime.fetch("https://x", retries=2), "fine")
+        self.assertEqual(self.sleeps, [2.0, 3.5])
+
+    def test_a_404_is_not_retried(self):
+        with mock.patch.object(toranime.urllib.request, "urlopen",
+                               side_effect=urllib.error.HTTPError(
+                                   "https://x", 404, "nope", {}, io.BytesIO(b""))) as opened:
+            with self.assertRaises(urllib.error.HTTPError):
+                toranime.fetch("https://x", retries=2)
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(self.sleeps, [])
+
+    def test_a_timeout_is_retried_for_a_get_but_not_a_post(self):
+        with mock.patch.object(toranime.urllib.request, "urlopen",
+                               side_effect=[urllib.error.URLError("timed out"),
+                                            urllib.error.URLError("timed out"),
+                                            self.reply(b"fine")]):
+            self.assertEqual(toranime.fetch("https://x", retries=2), "fine")
+        self.assertEqual(self.sleeps, [0.5, 1.0])
+        self.sleeps.clear()
+        with mock.patch.object(toranime.urllib.request, "urlopen",
+                               side_effect=urllib.error.URLError("timed out")) as opened:
+            with self.assertRaises(urllib.error.URLError):
+                toranime.fetch("https://x", data=b"{}", retries=2)
+        self.assertEqual(opened.call_count, 1)
+
+    def test_the_last_failure_is_the_one_raised(self):
+        last = urllib.error.HTTPError("https://x", 503, "still down", {}, io.BytesIO(b""))
+        with mock.patch.object(toranime.urllib.request, "urlopen",
+                               side_effect=[urllib.error.HTTPError("https://x", 500, "down",
+                                                                   {}, io.BytesIO(b"")),
+                                            urllib.error.HTTPError("https://x", 500, "down",
+                                                                   {}, io.BytesIO(b"")),
+                                            last]):
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                toranime.fetch("https://x", retries=2)
+        self.assertIs(caught.exception, last)
+        self.assertEqual(self.sleeps, [0.5, 1.0])
+
+    def test_the_addon_and_torbox_calls_ask_for_retries(self):
+        with mock.patch.object(toranime, "fetch_json", return_value={}) as asked:
+            toranime.addon_get("https://addon.example/manifest.json", "manifest.json")
+        self.assertEqual(asked.call_args.kwargs["retries"], toranime.RETRY_ATTEMPTS)
+        with mock.patch.object(toranime, "fetch",
+                               return_value='{"success": true, "data": {}}') as asked:
+            toranime.torbox("/user/me")
+        self.assertEqual(asked.call_args.kwargs["retries"], toranime.RETRY_ATTEMPTS)
 
 
 # ------------------------------------------------------------------ doctor

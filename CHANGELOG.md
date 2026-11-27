@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.16] - 2026-11-26
+
+### Fixed
+
+- **A single flaky response no longer fails a whole episode.** TorBox and addon calls
+  now retry a transient failure twice, backing off 0.5 s and then 1 s: 429, any 5xx and a
+  timeout are retried, a `Retry-After` header is honored instead of the backoff, and a
+  4xx (or a POST that timed out, which may already have been applied) is raised at once.
+  The last failure is the one reported.
+
 ## [2.2.15] - 2026-11-26
 
 ### Fixed

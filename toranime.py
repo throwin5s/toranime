@@ -45,6 +45,7 @@ Interactive controls:
 
 import argparse
 import codecs
+import email.utils
 import glob
 import hashlib
 import json
@@ -65,7 +66,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.15"
+__version__ = "2.2.16"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -395,15 +396,58 @@ def _fallback_pick(items, label, header):
 
 # ------------------------------------------------------------------ addons
 
-def fetch(url, headers=None, data=None, timeout=30):
-    """GET (or POST when `data` is given) -> the response body as text."""
+RETRY_ATTEMPTS = 2       # extra tries for a transient failure: 429, 5xx or a timeout
+RETRY_DELAY = 0.5        # seconds before the first retry; it doubles after that
+
+
+def _retry_after(e):
+    """a Retry-After header on an HTTP error -> seconds to wait, or None."""
+    raw = (getattr(e, "headers", None) or {}).get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        pass
+    try:                                        # the other allowed form: an HTTP date
+        when = email.utils.parsedate_tz(str(raw))
+        return max(0.0, email.utils.mktime_tz(when) - time.time()) if when else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _transient(e):
+    """is this HTTP failure worth another try? 429 and 5xx are; a 4xx is not."""
+    code = getattr(e, "code", None) or 0
+    return code == 429 or 500 <= code < 600
+
+
+def fetch(url, headers=None, data=None, timeout=30, retries=0):
+    """GET (or POST when `data` is given) -> the response body as text.
+
+    `retries` covers transient failures: 429, any 5xx and a timeout. a GET is also
+    retried when the connection drops; a POST only when the server answered with a
+    status, since a timed-out write may already have been applied. A Retry-After
+    header wins over the backoff. The last failure is the one raised."""
     req = urllib.request.Request(url, data, {**UA, **(headers or {})})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "replace")
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if attempt == retries or not _transient(e):
+                raise
+            wait = _retry_after(e)
+            e.close()
+            time.sleep(RETRY_DELAY * 2 ** attempt if wait is None else wait)
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == retries or data is not None:
+                raise
+            time.sleep(RETRY_DELAY * 2 ** attempt)
 
 
-def fetch_json(url, headers=None, data=None, timeout=30):
-    return json.loads(fetch(url, headers, data, timeout))
+def fetch_json(url, headers=None, data=None, timeout=30, retries=0):
+    return json.loads(fetch(url, headers, data, timeout, retries))
 
 
 def config_dir():
@@ -810,7 +854,8 @@ def addon_url(manifest, path):
 
 
 def addon_get(manifest, path, timeout=30):
-    return fetch_json(addon_url(manifest, path), timeout=timeout)
+    return fetch_json(addon_url(manifest, path), timeout=timeout,
+                      retries=RETRY_ATTEMPTS)
 
 
 def title_of(t):
@@ -1115,7 +1160,7 @@ def torbox(path, query=None, body=None, raw=None, content_type=None, timeout=30,
     elif content_type:
         headers["Content-Type"] = content_type
     try:
-        reply = json.loads(fetch(url, headers, data, timeout))
+        reply = json.loads(fetch(url, headers, data, timeout, retries=RETRY_ATTEMPTS))
     except urllib.error.HTTPError as e:
         try:
             said = json.loads(e.read().decode("utf-8", "replace"))
