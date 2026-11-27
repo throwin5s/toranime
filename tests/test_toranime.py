@@ -16,6 +16,7 @@ import io
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -2785,6 +2786,15 @@ class Retry(unittest.TestCase):
             with self.assertRaises(urllib.error.URLError):
                 toranime.fetch("https://x", data=b"{}", retries=2)
         self.assertEqual(opened.call_count, 1)
+
+    def test_a_socket_timeout_is_retried_too(self):
+        # on 3.8 and 3.9 a read timeout is socket.timeout, not TimeoutError
+        with mock.patch.object(toranime.urllib.request, "urlopen",
+                               side_effect=[socket.timeout("timed out"),
+                                            socket.timeout("timed out"),
+                                            self.reply(b"fine")]):
+            self.assertEqual(toranime.fetch("https://x", retries=2), "fine")
+        self.assertEqual(self.sleeps, [0.5, 1.0])
 
     def test_the_last_failure_is_the_one_raised(self):
         last = urllib.error.HTTPError("https://x", 503, "still down", {}, io.BytesIO(b""))

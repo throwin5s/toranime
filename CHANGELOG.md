@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.17] - 2026-11-27
+
+### Fixed
+
+- **The 2.2.16 retry now also covers a read timeout on Python 3.8 and 3.9.** There a socket
+  read timeout raises `socket.timeout`, which only became an alias of `TimeoutError` in
+  3.10, so the retry never matched it and one slow TorBox or addon response still failed
+  the episode on those versions. `fetch()` catches it too.
+
 ## [2.2.16] - 2026-11-26
 
 ### Fixed

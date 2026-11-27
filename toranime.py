@@ -66,7 +66,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.16"
+__version__ = "2.2.17"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -440,7 +440,7 @@ def fetch(url, headers=None, data=None, timeout=30, retries=0):
             wait = _retry_after(e)
             e.close()
             time.sleep(RETRY_DELAY * 2 ** attempt if wait is None else wait)
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
+        except (urllib.error.URLError, TimeoutError, socket.timeout, ConnectionError):
             if attempt == retries or data is not None:
                 raise
             time.sleep(RETRY_DELAY * 2 ** attempt)
