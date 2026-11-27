@@ -13,7 +13,7 @@ toranime is a client: it asks a Stremio addon what episodes exist, asks another 
 - **Interactive picker** - type to filter, `↑`/`↓` to move, `Enter` to select.
 - **Binge mode** - one mpv window keeps going: the next episode is added to the playlist while the current one plays, so it starts on its own (or press `Enter` in mpv to skip ahead). Volume and fullscreen stay put.
 - **Skips openings and endings** - when the file marks them as chapters, mpv jumps past the opening, and past the ending and preview into the next episode (stopping for an extra like Jujutsu Kaisen's Juju Stroll). `Tab` skips by hand, one key, no `Fn`.
-- **Picks up where you left off** - quit mid-episode and `Enter` resumes it. Plain `toranime` offers "continue ONE PIECE 1155 at 12:34", and mpv reopens at your last volume.
+- **Picks up where you left off** - plain `toranime` lists the shows you watched recently, newest first, with the episode and where you stopped (type to narrow); `Enter` takes the top one, and mpv reopens at your last volume.
 - **Remembers your fixes per show** - an audio delay, subtitle size or subtitle position you set in mpv sticks to that show, for dub and sub separately.
 - **AniList tracking (optional)** - log in once with `toranime --anilist` and every episode you finish updates your progress on [AniList](https://anilist.co).
 - **Ranges** - `1151-1160` plays exactly those, back to back.

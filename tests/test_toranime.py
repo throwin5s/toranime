@@ -596,6 +596,22 @@ class Pipeline(unittest.TestCase):
                  {"id": 5, "name": "Show/Show - 01.mkv", "size": 100}]
         self.assertEqual(toranime.pick_file(loose, 1, season=1)["id"], 5)
 
+    def test_pick_file_uses_the_within_season_number_of_a_pack(self):
+        pack = [{"id": 1, "name": "Show/Show - S02E05.mkv", "size": 100},
+                {"id": 2, "name": "Show/Show - S02E04.mkv", "size": 900}]
+        # the addon says episode 31, the release counts 5 within season 2
+        self.assertEqual(toranime.pick_file(pack, 31, season=2, episode=5)["id"], 1)
+        # no within-season number: never fall back to the biggest file of a numbered pack
+        with self.assertRaises(LookupError):
+            toranime.pick_file(pack, 31, season=2)
+        single = [{"id": 9, "name": "Show/Show - S02E05.mkv", "size": 5}]
+        self.assertEqual(toranime.pick_file(single, 31, season=2)["id"], 9)
+
+    def test_an_episode_keeps_its_within_season_number(self):
+        ep = toranime.episode_of({"id": "kitsu:1:31", "episode": 5, "absoluteEpisode": 31,
+                                  "season": 2, "title": "T"})
+        self.assertEqual((ep["number"], ep["episode"], ep["season"]), (31, 5, 2))
+
     def test_human_size(self):
         self.assertEqual([toranime.human_size(n) for n in (1400000000, 900 * 1024 ** 2, 2048)],
                          ["1.30 GB", "900 MB", "2 KB"])
@@ -1452,11 +1468,12 @@ class Session(unittest.TestCase):
         labels = []
         with mock.patch.object(toranime, "load_anime", lambda slug: (self.anime, eps)), \
                 mock.patch.object(toranime, "interactive_ok", lambda: True), \
-                mock.patch.object(toranime, "menu_pick",
-                                  lambda opts, d, h: labels.append(opts[0][0]) or 0):
+                mock.patch.object(toranime, "fuzzy_pick",
+                                  lambda items, label, header, noun="items", initial=0:
+                                  labels.append(label(items[0])) or items[0]):
             anime, got_eps, lang, idx, start = toranime.continue_prompt()
         self.assertEqual((lang, idx, start), ("dub", 1, 754.0))
-        self.assertEqual(labels, ["ONE PIECE 1155 (dub) at 12:34"])
+        self.assertTrue(labels[0].startswith("ONE PIECE 1155 (dub) at 12:34"))
 
     def test_plain_toranime_continues_where_it_left_off(self):
         # the whole path from `toranime` with no arguments to mpv: Enter on "continue"
@@ -1467,7 +1484,9 @@ class Session(unittest.TestCase):
         with mock.patch.object(toranime, "ensure_player", lambda mpv, yes: ["mpv"]), \
                 mock.patch.object(toranime, "load_anime", lambda slug: (self.anime, eps)), \
                 mock.patch.object(toranime, "interactive_ok", lambda: True), \
-                mock.patch.object(toranime, "menu_pick", lambda opts, default, header: default), \
+                mock.patch.object(toranime, "fuzzy_pick",
+                                  lambda items, label, header, noun="items", initial=0:
+                                  items[0]), \
                 mock.patch.object(toranime, "choose_group", lambda *a: None), \
                 mock.patch.object(toranime, "play_session",
                                   lambda *a: played.append(a) or (0, None, "quit")):
@@ -1821,7 +1840,7 @@ class SeaDex(unittest.TestCase):
         pick = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
         seen = {}
 
-        def fake_resolve(stream, number, season=None, verbose=True):
+        def fake_resolve(stream, number, season=None, verbose=True, episode=None):
             seen["stream"] = stream
             return "https://example.invalid/link", {}
 
@@ -1841,7 +1860,7 @@ class SeaDex(unittest.TestCase):
         cached_release = {"infoHash": "c" * 40, "title": "[Judas] ONE PIECE 1151 [1080p]"}
         seen, started = {}, threading.Event()
 
-        def fake_resolve(stream, number, season=None, verbose=True):
+        def fake_resolve(stream, number, season=None, verbose=True, episode=None):
             seen["stream"] = stream
             return "https://example.invalid/link", {}
 
@@ -1869,7 +1888,7 @@ class SeaDex(unittest.TestCase):
         pick = {"infoHash": "a" * 40, "title": "[A&C] ONE PIECE 1151 [1080p]"}
         seen, waited = {}, {}
 
-        def fake_resolve(stream, number, season=None, verbose=True):
+        def fake_resolve(stream, number, season=None, verbose=True, episode=None):
             seen["stream"] = stream
             return "https://example.invalid/link", {}
 
@@ -2728,6 +2747,81 @@ class Android(unittest.TestCase):
         with mock.patch.object(toranime.subprocess, "run", side_effect=FileNotFoundError), \
                 self.assertRaisesRegex(SystemExit, "termux-am"):
             toranime.android_open("https://x")
+
+
+# ------------------------------------------------------------------ continue
+
+
+class Continue(unittest.TestCase):
+    """plain `toranime`: the shows watched recently, newest first."""
+
+    def setUp(self):
+        self.path = os.path.join(toranime.state_dir(), "history.json")
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(self.path)
+
+    def tearDown(self):
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(self.path)
+
+    def remember_all(self, shows):
+        os.makedirs(toranime.state_dir(), exist_ok=True)
+        with open(self.path, "w", encoding="utf-8") as fh:
+            json.dump({"last": next(iter(shows)), "shows": shows}, fh)
+
+    def test_recent_shows_are_newest_first_and_skip_other_languages(self):
+        self.remember_all({
+            "kitsu:1": {"title": "OLD", "lang": "sub", "episode": "3",
+                        "position": 600, "time": 1000},
+            "kitsu:2": {"title": "NEW", "lang": "dub", "episode": "8",
+                        "position": None, "time": 2000},
+            "kitsu:3": {"title": "ODD", "lang": "spanish", "episode": "1", "time": 3000},
+        })
+        rows = toranime.recent_shows(toranime.load_history())
+        self.assertEqual([key for key, _ in rows], ["kitsu:2", "kitsu:1"])
+        self.assertIn("NEW 8 (dub)", toranime.recent_label(rows[0][1]))
+        self.assertIn("OLD 3 (sub) at 10:00", toranime.recent_label(rows[1][1]))
+
+    def test_the_list_caps_how_many_shows_it_offers(self):
+        shows = {f"kitsu:{i}": {"title": f"S{i}", "lang": "sub", "episode": "1",
+                                "time": i} for i in range(20)}
+        self.remember_all(shows)
+        rows = toranime.recent_shows(toranime.load_history())
+        self.assertEqual(len(rows), toranime.RECENT_SHOWS)
+        self.assertEqual(rows[0][0], "kitsu:19")
+
+    def test_choosing_a_show_resumes_where_it_stopped(self):
+        self.remember_all({
+            "kitsu:10740": {"title": "ONE PIECE", "lang": "sub", "episode": "1151",
+                            "position": 754.0, "time": 1000},
+            "kitsu:9": {"title": "FILM RED", "lang": "sub", "episode": "1",
+                        "position": None, "time": 2000},
+        })
+        seen = []
+
+        def pick(items, label, header, noun="items", initial=0):
+            seen.append([label(it) for it in items])
+            return next(it for it in items if it.get("_key") == "kitsu:10740")
+
+        with mock.patch.object(toranime, "interactive_ok", lambda: True), \
+                mock.patch.object(toranime, "fuzzy_pick", pick), \
+                mock.patch.object(toranime, "load_anime",
+                                  lambda key: (dict(ANIME, _key=key), EPISODES)):
+            got = toranime.continue_prompt()
+        self.assertEqual(got[0]["_key"], "kitsu:10740")
+        self.assertEqual((got[2], got[3], got[4]), ("sub", 1, 754.0))
+        self.assertIn("FILM RED 1 (sub)", seen[0][0])
+        self.assertEqual(seen[0][-1], "search for something else")
+
+    def test_search_for_something_else_returns_none(self):
+        self.remember_all({"kitsu:10740": {"title": "ONE PIECE", "lang": "sub",
+                                           "episode": "1151", "position": 5.0,
+                                           "time": 1000}})
+        with mock.patch.object(toranime, "interactive_ok", lambda: True), \
+                mock.patch.object(toranime, "fuzzy_pick",
+                                  lambda items, label, header, noun="items", initial=0:
+                                  items[-1]):
+            self.assertIsNone(toranime.continue_prompt())
 
 
 # ------------------------------------------------------------------ retries

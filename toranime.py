@@ -66,7 +66,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.17"
+__version__ = "2.2.18"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -887,9 +887,12 @@ def search_label(r):
 
 
 def episode_of(v):
-    """a meta addon video -> the episode dict the picker, ranges and mpv titles use."""
+    """a meta addon video -> the episode dict the picker, ranges and mpv titles use.
+    "episode" stays the within-season number when the addon also gives an absolute one:
+    a release counts within its season even when the show is numbered from episode 1."""
     n = v.get("absoluteEpisode") or v.get("episode") or 0
-    return {"number": n, "title": v.get("title") or "", "season": v.get("season") or 1,
+    return {"number": n, "episode": v.get("episode") or 0, "title": v.get("title") or "",
+            "season": v.get("season") or 1,
             "filler": bool(v.get("filler") or v.get("isFiller")), "imdb_id": v.get("imdb_id"),
             "imdbSeason": v.get("imdbSeason"), "imdbEpisode": v.get("imdbEpisode"),
             "_id": v.get("id")}
@@ -1381,17 +1384,35 @@ def episode_in(name, number):
                           base))
 
 
-def pick_file(files, number, season=None):
-    """the file for this episode: one named for it, that season first, else the biggest
-    video (a single-file release states no episode)."""
+PACK_EPISODE_RE = re.compile(r"(?i)\bE(?:P)?\d{1,4}(?:v\d)?\b")
+
+
+def pick_file(files, number, season=None, episode=None):
+    """the file for this episode: one named for it, that season first, else the only
+    video (a single-file release states no episode).
+
+    the meta addon may number episodes absolutely (1151) while a release counts within
+    its season (S02E05), so `episode` is that season-relative number when the addon has
+    one. a multi-file release that numbers its files but holds none for this episode is
+    refused: its biggest file would be some other episode."""
     if not files:
         return None
-    named = [f for f in files if episode_in(str(f.get("name") or ""), number)]
+
+    def name(f):
+        return str(f.get("name") or "")
+
+    named = [f for f in files if episode_in(name(f), number)]
+    if not named and season is not None and episode and str(episode) != str(number):
+        named = [f for f in files if file_season(name(f)) in (None, season)
+                 and episode_in(name(f), episode)]
     if not named:
+        if len(files) > 1 and any(file_season(name(f)) is not None
+                                  or PACK_EPISODE_RE.search(name(f)) for f in files):
+            raise LookupError(f"that release has no file for episode {number}")
         return max(files, key=lambda f: f.get("size") or 0)
     if season is not None:
-        same = [f for f in named if file_season(str(f.get("name") or "")) == season]
-        loose = [f for f in named if file_season(str(f.get("name") or "")) is None]
+        same = [f for f in named if file_season(name(f)) == season]
+        loose = [f for f in named if file_season(name(f)) is None]
         named = same or loose or named
     return max(named, key=lambda f: f.get("size") or 0)
 
@@ -1469,13 +1490,13 @@ def warm_pick(stream, budget=0):
         time.sleep(2)
 
 
-def resolve_torrent(stream, number, season=None, verbose=True):
+def resolve_torrent(stream, number, season=None, verbose=True, episode=None):
     """one release -> (url, info) through TorBox."""
     tid = torbox_add(stream)
     torrent, files = torbox_state(tid)
     if not (torrent.get("download_finished") or torrent.get("download_present")):
         torrent, files = wait_download(tid, verbose)
-    f = pick_file(files, number, season)
+    f = pick_file(files, number, season, episode)
     if not f:
         raise LookupError("no video file in that release")
     return torbox_link(tid, f.get("id")), {
@@ -1500,6 +1521,7 @@ def resolve(anime, ep, lang, verbose=True):
     picked = seadex_for(anime)
     torrents.sort(key=lambda s: stream_rank(s, cached, want, picked))
     season = ep.get("imdbSeason") or ep.get("season")
+    within = (ep.get("imdbEpisode") if ep.get("imdbSeason") else None) or ep.get("episode")
     # SeaDex first, but never at the price of three silent minutes: an uncached pick is
     # asked for in the background (it leads from the next play on) while a cached release
     # plays now. only when nothing is cached is the pick waited on, since it is all there is.
@@ -1520,7 +1542,7 @@ def resolve(anime, ep, lang, verbose=True):
     errors = []
     for stream in torrents[:MAX_TRIES]:
         try:
-            return resolve_torrent(stream, number, season, verbose)
+            return resolve_torrent(stream, number, season, verbose, within)
         except (LookupError, RuntimeError, OSError, ValueError) as e:
             errors.append(f"{stream_text(stream)[:60]}: {e}")
     for stream in direct:               # an addon that proxies (AIOStreams) needs no TorBox
@@ -3109,38 +3131,65 @@ def available(eps, lang):
     return [ep for ep in eps if ep.get("number")]
 
 
+RECENT_SHOWS = 8         # how many of the shows watched recently the first prompt offers
+
+
+def recent_shows(history, limit=RECENT_SHOWS):
+    """history -> [(key, entry)] newest first: the shows worth offering to continue."""
+    shows = history.get("shows") if isinstance(history.get("shows"), dict) else {}
+    rows = [(key, h) for key, h in shows.items()
+            if isinstance(h, dict) and h.get("lang") in LANGS]
+    rows.sort(key=lambda row: row[1].get("time") or 0, reverse=True)
+    return rows[:limit]
+
+
+def recent_label(h):
+    """one line for the continue list: title, episode, language, position and when."""
+    line = f"{h.get('title') or '?'} {h.get('episode') or '?'} ({h.get('lang')})"
+    pos = h.get("position")
+    if isinstance(pos, (int, float)) and pos > 0:
+        line += f" at {clock(pos)}"
+    at = h.get("time")
+    if isinstance(at, (int, float)) and at > 0:
+        line += f"  ·  {_doc_age(time.time() - at)}"
+    return line
+
+
 def continue_prompt():
-    """offer to carry on with the show watched last.
+    """offer the shows watched recently, newest first; type to filter.
     -> (anime, episodes, lang, index, start seconds), or None to search."""
     history = load_history()
-    key = history.get("last")
-    h = (history.get("shows") or {}).get(key) if isinstance(key, str) else None
-    if not isinstance(h, dict) or h.get("lang") not in LANGS or not interactive_ok():
+    rows = recent_shows(history)
+    if not rows or not interactive_ok():
         return None
-    got = load_anime(key)
-    if not got:
-        return None
-    anime, lang = got[0], h["lang"]
-    eps = available(got[1], lang)
-    point = resume_point(anime, eps, lang, history)
-    if not point:
-        return None
-    i, start = point
-    name = title_of(anime.get("title"))
-    if start is None:
-        label = f"{name} ({lang}), caught up at {epnum(eps[i])}: pick an episode"
-    elif start:
-        label = f"{name} {epnum(eps[i])} ({lang}) at {clock(start)}"
-    else:
-        label = f"{name} {ep_label(eps[i]).strip()} ({lang})"
-    if menu_pick([(label, 0), ("search for something else", 1)], 0, "\ncontinue watching?"):
-        return None
-    if start is None:
-        ep = episode_picker(anime, eps, f"\n{name} ({lang}):", initial=i)
-        if ep is None:
-            sys.exit("cancelled")
-        i, start = eps.index(ep), 0.0
-    return anime, eps, lang, i, start
+    items = [dict(h, _key=key) for key, h in rows] + [{"_search": True}]
+
+    def label(item):
+        return "search for something else" if item.get("_search") else recent_label(item)
+
+    while True:
+        pick = fuzzy_pick(items, label, "\ncontinue watching:", noun="shows")
+        if not pick or pick.get("_search"):
+            return None
+        lang = pick["lang"]
+        got = load_anime(pick["_key"])
+        if not got:
+            sys.stderr.write(f"{pick.get('title')}: the meta addon has no episodes for it\n")
+            continue
+        anime, eps = got[0], available(got[1], lang)
+        point = resume_point(anime, eps, lang, history)
+        if not point:
+            sys.stderr.write(f"{pick.get('title')}: where you left off isn't in the "
+                             f"episode list\n")
+            continue
+        i, start = point
+        if start is None:               # caught up: let them pick an earlier episode
+            name = title_of(anime.get("title"))
+            ep = episode_picker(anime, eps, f"\n{name} ({lang}):", initial=i)
+            if ep is None:
+                sys.exit("cancelled")
+            i, start = eps.index(ep), 0.0
+        return anime, eps, lang, i, start
 
 
 def watch(cmd, anime, eps, idx, lang, start=0.0, stop=None):

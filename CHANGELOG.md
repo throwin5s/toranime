@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.18] - 2026-11-27
+
+### Added
+
+- **Plain `toranime` offers the shows you watched recently, not just the last one.** The
+  continue prompt is now a type-to-filter list of up to eight shows, newest first, each
+  with its episode, language, resume position and when you last watched it. `Enter`
+  takes the newest; "search for something else" and `Esc` go to the search.
+
+### Fixed
+
+- **A season pack can no longer play the wrong episode.** When the meta addon numbers
+  episodes absolutely but the release's own files count within the season (`S02E05`),
+  the addon's within-season number is used to pick the file. A multi-file release that
+  numbers its files but holds none for the episode is now skipped with a message instead
+  of playing its largest file.
+
 ## [2.2.17] - 2026-11-27
 
 ### Fixed

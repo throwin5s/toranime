@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "toranime-mpv"
-version = "2.2.17"
+version = "2.2.18"
 description = "Stream anime in mpv through TorBox, English dubs included - interactive picker, zero dependencies."
 readme = "README.md"
 requires-python = ">=3.8"
