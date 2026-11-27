@@ -2759,6 +2759,8 @@ class Doctor(unittest.TestCase):
         self.assertEqual(toranime.doc_account({"email": "viewer@example.com", "plan": "pro"}),
                          "v***@example.com (plan: pro)")
         self.assertEqual(toranime.doc_account({"email": ""}), "your account")
+        self.assertEqual(toranime.mask_name("untitledinbrackets"), "u***")
+        self.assertEqual(toranime.mask_name(""), "")
         home = os.path.expanduser("~")
         self.assertEqual(toranime.doc_path(os.path.join(home, ".config", "toranime")),
                          os.path.join("~", ".config", "toranime"))
@@ -2812,6 +2814,21 @@ class Doctor(unittest.TestCase):
         self.assertIn("torrentio.strem.fun", text)
         self.assertIn("from sources.json", text)
         self.assertNotIn("private-config-abc", text)
+
+    def test_the_anilist_username_is_masked(self):
+        path = toranime.anilist_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"token": "good"}, fh)
+        try:
+            with net():
+                code = self.doctor()
+        finally:
+            os.remove(path)
+        text = self.out.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("v*** (tracking on)", text)
+        self.assertNotIn("viewer (tracking on)", text)
 
     def test_an_expired_anilist_login_is_caught(self):
         path = toranime.anilist_file()

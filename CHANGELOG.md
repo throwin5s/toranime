@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org).
 
+## [2.2.14] - 2026-11-26
+
+### Changed
+
+- **`--doctor` masks the AniList username too.** The saved login now reads
+  `u*** (tracking on)` instead of the full name, matching the masked TorBox email on a
+  page that says it is safe to paste into an issue. A login that is missing or not
+  needed is still reported the same way.
+
 ## [2.2.13] - 2026-11-26
 
 ### Changed

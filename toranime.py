@@ -65,7 +65,7 @@ import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
-__version__ = "2.2.13"
+__version__ = "2.2.14"
 
 # what this is called: the command, the module and the per-user folders. files left by
 # the old name (LEGACY) are still read, so an install made before the rename keeps its
@@ -3206,8 +3206,9 @@ def update():
 
 # ------------------------------------------------------------------ doctor
 # `toranime --doctor`: everything a run depends on, on one page. paths, hosts and
-# answers only -- never the TorBox key, an AniList token, or a sources.json url that
-# carries a private config in its path. plain ASCII lines, so it survives any paste.
+# answers only -- never the TorBox key, an AniList token or full username, an account
+# email, or a sources.json url that carries a private config in its path. plain ASCII
+# lines, so it survives any paste.
 
 def mask_email(email):
     """an address -> only what tells you it is yours: first character and domain."""
@@ -3215,6 +3216,12 @@ def mask_email(email):
     if not at or not domain:
         return "***" if email else ""
     return f"{local[:1] or '?'}***@{domain}"
+
+
+def mask_name(name):
+    """a username -> only its first character: u***, so a paste names nobody."""
+    name = str(name or "")
+    return f"{name[:1]}***" if name else ""
 
 
 def doc_account(who):
@@ -3441,7 +3448,7 @@ def doctor(mpv="mpv"):
                               "Content-Type": "application/json",
                               "Accept": "application/json"},
                 json.dumps({"query": "query { Viewer { name } }"}).encode(), timeout=15))
-            name = ((reply.get("data") or {}).get("Viewer") or {}).get("name")
+            name = mask_name(((reply.get("data") or {}).get("Viewer") or {}).get("name"))
             line("ok", "login", f"{name} (tracking on)" if name else
                  "signed in (tracking on)")
         except urllib.error.HTTPError as e:
@@ -3454,7 +3461,7 @@ def doctor(mpv="mpv"):
     print()
     print("all checks passed" if not bad
           else f"{len(bad)} check(s) need attention: {', '.join(bad)}")
-    print("nothing here is a key or a token: safe to paste into an issue.")
+    print("nothing here is a key, a token or a full account name: safe to paste into an issue.")
     return 0 if not bad else 1
 
 
